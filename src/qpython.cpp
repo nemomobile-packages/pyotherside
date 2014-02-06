@@ -71,6 +71,12 @@ void
 QPython::addImportPath(QString path)
 {
     priv->enter();
+
+    // Strip leading "file://" (for use with Qt.resolvedUrl())
+    if (path.startsWith("file://")) {
+        path = path.mid(7);
+    }
+
     QByteArray utf8bytes = path.toUtf8();
 
     PyObject *sys_path = PySys_GetObject((char*)"path");
@@ -245,4 +251,16 @@ QPython::imported(bool result, QJSValue *callback)
     args << v;
     callback->call(args);
     delete callback;
+}
+
+QString
+QPython::pluginVersion()
+{
+    return QString(PYOTHERSIDE_VERSION);
+}
+
+QString
+QPython::pythonVersion()
+{
+    return QString(PY_VERSION);
 }
