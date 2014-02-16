@@ -27,14 +27,20 @@
 #include <QJSEngine>
 
 
+#define SINCE_API_VERSION(smaj, smin) \
+    ((api_version_major > smaj) || (api_version_major == smaj && api_version_minor >= smin))
+
+
 QPythonPriv *
 QPython::priv = NULL;
 
-QPython::QPython(QObject *parent)
+QPython::QPython(QObject *parent, int api_version_major, int api_version_minor)
     : QObject(parent)
     , worker(new QPythonWorker(this))
     , thread()
     , handlers()
+    , api_version_major(api_version_major)
+    , api_version_minor(api_version_minor)
 {
     if (priv == NULL) {
         priv = new QPythonPriv;
@@ -108,11 +114,35 @@ QPython::importModule_sync(QString name)
     const char *moduleName = utf8bytes.constData();
 
     priv->enter();
-    PyObject *module = PyImport_ImportModule(moduleName);
+
+    bool use_api_10 = (api_version_major == 1 && api_version_minor == 0);
+
+    PyObject *module = NULL;
+
+    if (use_api_10) {
+        // PyOtherSide API 1.0 behavior (star import)
+        module = PyImport_ImportModule(moduleName);
+    } else {
+        // PyOtherSide API 1.2 behavior: "import x.y.z"
+        PyObject *fromList = PyList_New(0);
+        module = PyImport_ImportModuleEx(const_cast<char *>(moduleName), NULL, NULL, fromList);
+        Py_XDECREF(fromList);
+    }
+
     if (module == NULL) {
         emit error(QString("Cannot import module: %1 (%2)").arg(name).arg(priv->formatExc()));
         priv->leave();
         return false;
+    }
+
+    if (!use_api_10) {
+        // PyOtherSide API 1.2 behavior: "import x.y.z"
+        // If "x.y.z" is imported, we need to set "x" in globals
+        if (name.indexOf('.') != -1) {
+            name = name.mid(0, name.indexOf('.'));
+            utf8bytes = name.toUtf8();
+            moduleName = utf8bytes.constData();
+        }
     }
 
     PyDict_SetItemString(priv->globals, moduleName, module);
@@ -139,8 +169,10 @@ QPython::receive(QVariant variant)
             // call is asynchronous (it returns before we call into JS), so do
             // the next best thing and report the error to our error handler in
             // QML instead.
-            emit error(QString("pyotherside.send() failed handler: %1")
-                    .arg(result.toString()));
+            emit error("pyotherside.send() failed handler: " +
+                    result.property("fileName").toString() + ":" +
+                    result.property("lineNumber").toString() + ": " +
+                    result.toString());
         }
     } else {
         // Default action
@@ -239,7 +271,14 @@ QPython::finished(QVariant result, QJSValue *callback)
     QJSValueList args;
     QJSValue v = callback->engine()->toScriptValue(result);
     args << v;
-    callback->call(args);
+    QJSValue callbackResult = callback->call(args);
+    if (SINCE_API_VERSION(1, 2)) {
+        if (callbackResult.isError()) {
+            emit error(callbackResult.property("fileName").toString() + ":" +
+                    callbackResult.property("lineNumber").toString() + ": " +
+                    callbackResult.toString());
+        }
+    }
     delete callback;
 }
 
@@ -249,7 +288,14 @@ QPython::imported(bool result, QJSValue *callback)
     QJSValueList args;
     QJSValue v = callback->engine()->toScriptValue(QVariant(result));
     args << v;
-    callback->call(args);
+    QJSValue callbackResult = callback->call(args);
+    if (SINCE_API_VERSION(1, 2)) {
+        if (callbackResult.isError()) {
+            emit error(callbackResult.property("fileName").toString() + ":" +
+                    callbackResult.property("lineNumber").toString() + ": " +
+                    callbackResult.toString());
+        }
+    }
     delete callback;
 }
 

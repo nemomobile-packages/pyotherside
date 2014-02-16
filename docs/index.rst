@@ -28,13 +28,25 @@ This section describes the QML API exposed by the *PyOtherSide* QML Plugin.
 Import Versions
 ---------------
 
-The current QML API version of PyOtherSide is 1.0. When new features are
-introduced, the API version will be bumped and documented here.
+The current QML API version of PyOtherSide is 1.2. When new features are
+introduced, or behavior is changed, the API version will be bumped and
+documented here.
 
 io.thp.pyotherside 1.0
 ``````````````````````
 
 * Initial API release.
+
+io.thp.pyotherside 1.2
+``````````````````````
+
+* :func:`importModule` now behaves like the ``import`` statement in Python
+  for names with dots. This means that ``importModule('x.y.z', ...)`` now
+  works like ``import x.y.z`` in Python.
+
+* If a JavaScript exception occurs in the callback passed to
+  :func:`importModule` or :func:`call`, the signal :func:`error` is emitted
+  with the exception information (filename, line, message) as ``traceback``.
 
 QML ``Python`` Element
 ----------------------
@@ -48,7 +60,7 @@ To use the ``Python`` element in a QML file, you have to import the plugin using
 
 .. code-block:: javascript
 
-    import io.thp.pyotherside 1.0
+    import io.thp.pyotherside 1.2
 
 Signals
 ```````
@@ -84,9 +96,20 @@ path and then importing the module asynchronously:
     ``file://`` from the path, so you can use :func:`Qt.resolvedUrl()`
     without having to manually strip the leading ``file://`` in QML.
 
-.. function:: importModule(string name, callable callback)
+.. function:: importModule(string name, function callback(success) {})
 
     Import a Python module.
+
+.. versionchanged:: 1.2.0
+    Previously, this function didn't work correctly for importing
+    modules with dots in their name. Starting with the API version 1.2
+    (``import io.thp.pyotherside 1.2``), this behavior is now fixed,
+    and ``importModule('x.y.z, ...)`` behaves like ``import x.y.z``.
+
+.. versionchanged:: 1.2.0
+    If a JavaScript exception occurs in the callback, the :func:`error`
+    signal is emitted with ``traceback`` containing the exception info
+    (QML API version 1.2 and newer).
 
 Once modules are imported, Python function can be called on the
 imported modules using:
@@ -97,6 +120,11 @@ imported modules using:
     If ``args`` is omitted, ``func`` will be called without arguments.
     If ``callback`` is a callable, it will be called with the Python
     function result as single argument when the call has succeeded.
+
+.. versionchanged:: 1.2.0
+    If a JavaScript exception occurs in the callback, the :func:`error`
+    signal is emitted with ``traceback`` containing the exception info
+    (QML API version 1.2 and newer).
 
 For some of these methods, there also exist synchronous variants, but it is
 highly recommended to use the asynchronous variants instead to avoid blocking
@@ -120,6 +148,12 @@ plugin and Python interpreter.
 .. function:: pluginVersion() -> string
 
     Get the version of the PyOtherSide plugin that is currently used.
+
+.. note::
+    This is not necessarily the same as the QML API version currently in use.
+    The QML API version is decided by the QML import statement, so even if
+    :func:`pluginVersion`` returns 1.2.0, if the plugin has been imported as
+    ``import io.thp.pyotherside 1.0``, the API version used would be 1.0.
 
 .. versionadded:: 1.1.0
 
@@ -215,24 +249,30 @@ PyOtherSide will automatically convert Python data types to Qt data types
 The following data types are supported and can be used to pass data
 between Python and QML (and vice versa):
 
-+------------+------------+-----------------------------+
-| Python     | QML        | Remarks                     |
-+============+============+=============================+
-| bool       | bool       |                             |
-+------------+------------+-----------------------------+
-| int        | int        |                             |
-+------------+------------+-----------------------------+
-| float      | double     |                             |
-+------------+------------+-----------------------------+
-| str        | string     |                             |
-+------------+------------+-----------------------------+
-| list       | JS Array   |                             |
-+------------+------------+-----------------------------+
-| tuple      | JS Array   | JS Arrays are converted to  |
-|            |            | lists, not tuples           |
-+------------+------------+-----------------------------+
-| dict       | JS Object  | Keys must be strings        |
-+------------+------------+-----------------------------+
++--------------------+------------+-----------------------------+
+| Python             | QML        | Remarks                     |
++====================+============+=============================+
+| bool               | bool       |                             |
++--------------------+------------+-----------------------------+
+| int                | int        |                             |
++--------------------+------------+-----------------------------+
+| float              | double     |                             |
++--------------------+------------+-----------------------------+
+| str                | string     |                             |
++--------------------+------------+-----------------------------+
+| list               | JS Array   |                             |
++--------------------+------------+-----------------------------+
+| tuple              | JS Array   | JS Arrays are converted to  |
+|                    |            | lists, not tuples           |
++--------------------+------------+-----------------------------+
+| dict               | JS Object  | Keys must be strings        |
++--------------------+------------+-----------------------------+
+| datetime.date      | QML date   | since PyOtherSide 1.2.0     |
++--------------------+------------+-----------------------------+
+| datetime.time      | QML time   | since PyOtherSide 1.2.0     |
++--------------------+------------+-----------------------------+
+| datetime.datetime  | JS Date    | since PyOtherSide 1.2.0     |
++--------------------+------------+-----------------------------+
 
 Trying to pass in other types than the ones listed here is undefined
 behavior and will usually result in an error.
@@ -491,7 +531,7 @@ Using this function from QML is straightforward:
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.0
+    import io.thp.pyotherside 1.2
 
     Rectangle {
         color: 'black'
@@ -585,7 +625,7 @@ This module can now be imported in QML and used as ``source`` in the QML
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.0
+    import io.thp.pyotherside 1.2
 
     Image {
         id: image
@@ -672,6 +712,17 @@ BB10), the QML plugins folder can be deployed with the .bar file.
 
 ChangeLog
 =========
+
+Version 1.2.0 (2014-02-16)
+--------------------------
+
+* Introduced versioned QML imports for API change.
+* QML API 1.2: Change :func:`importModule` behavior for imports with dots.
+* QML API 1.2: Emit :func:`error` when JavaScript callbacks passed to
+  :func:`importModule` and :func:`call` throw an exception.
+* New data type conversions: Python ``datetime.date``, ``datetime.time``
+  and ``datetime.datetime`` are converted to QML ``date``, ``time`` and
+  JS ``Date`` types, respectively.
 
 Version 1.1.0 (2014-02-06)
 --------------------------
