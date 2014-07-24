@@ -24,9 +24,6 @@
 #include "Python.h"
 #include "datetime.h"
 
-#if PY_MAJOR_VERSION >= 3
-#  define PY3K
-#endif
 
 class PyObjectListBuilder : public ListBuilder<PyObject *> {
     public:
@@ -65,35 +62,46 @@ class PyObjectDictBuilder : public DictBuilder<PyObject *> {
 
 class PyObjectListIterator : public ListIterator<PyObject *> {
     public:
-        PyObjectListIterator(PyObject *&v) : list(v), pos(0) {}
-        virtual ~PyObjectListIterator() {}
+        PyObjectListIterator(PyObject *&v)
+            : list(v)
+            , iter(PyObject_GetIter(list))
+            , ref(NULL)
+        {
+            if (iter == NULL) {
+                // TODO: Handle error
+            }
+        }
 
-        virtual int count() {
-            if (PyList_Check(list)) {
-                return PyList_Size(list);
-            } else {
-                return PyTuple_Size(list);
+        virtual ~PyObjectListIterator()
+        {
+            Py_XDECREF(ref);
+            Py_XDECREF(iter);
+
+            if (PyErr_Occurred()) {
+                // TODO: Handle error
             }
         }
 
         virtual bool next(PyObject **v) {
-            if (pos == count()) {
+            if (!iter) {
                 return false;
             }
 
-            if (PyList_Check(list)) {
-                *v = PyList_GetItem(list, pos);
-            } else {
-                *v = PyTuple_GetItem(list, pos);
+            Py_XDECREF(ref);
+            ref = PyIter_Next(iter);
+
+            if (ref) {
+                *v = ref;
+                return true;
             }
 
-            pos++;
-            return true;
+            return false;
         }
 
     private:
         PyObject *list;
-        int pos;
+        PyObject *iter;
+        PyObject *ref;
 };
 
 class PyObjectDictIterator : public DictIterator<PyObject *> {
@@ -131,13 +139,8 @@ class PyObjectConverter : public Converter<PyObject *> {
         virtual enum Type type(PyObject *&o) {
             if (PyBool_Check(o)) {
                 return BOOLEAN;
-#ifdef PY3K
             } else if (PyLong_Check(o)) {
                 return INTEGER;
-#else
-            } else if (PyLong_Check(o) || PyInt_Check(o)) {
-                return INTEGER;
-#endif
             } else if (PyFloat_Check(o)) {
                 return FLOATING;
             } else if (PyUnicode_Check(o) || PyBytes_Check(o)) {
@@ -150,7 +153,7 @@ class PyObjectConverter : public Converter<PyObject *> {
                 return DATE;
             } else if (PyTime_Check(o)) {
                 return TIME;
-            } else if (PyList_Check(o) || PyTuple_Check(o)) {
+            } else if (PyList_Check(o) || PyTuple_Check(o) || PySet_Check(o) || PyIter_Check(o)) {
                 return LIST;
             } else if (PyDict_Check(o)) {
                 return DICT;
@@ -165,17 +168,7 @@ class PyObjectConverter : public Converter<PyObject *> {
             return NONE;
         }
 
-        virtual long long integer(PyObject *&o) {
-#ifdef PY3K
-            return PyLong_AsLong(o);
-#else
-            if (PyInt_Check(o)) {
-                return PyInt_AsLong(o);
-            } else {
-                return PyLong_AsLong(o);
-            }
-#endif
-        }
+        virtual long long integer(PyObject *&o) { return PyLong_AsLong(o); }
         virtual double floating(PyObject *&o) { return PyFloat_AsDouble(o); }
         virtual bool boolean(PyObject *&o) { return (o == Py_True); }
         virtual const char *string(PyObject *&o) {

@@ -66,12 +66,8 @@ class QVariantListIterator : public ListIterator<QVariant> {
         QVariantListIterator(QVariant &v) : list(v.toList()), pos(0) {}
         virtual ~QVariantListIterator() {}
 
-        virtual int count() {
-            return list.size();
-        }
-
         virtual bool next(QVariant *v) {
-            if (pos == count()) {
+            if (pos == list.size()) {
                 return false;
             }
 
@@ -136,6 +132,7 @@ class QVariantConverter : public Converter<QVariant> {
                 case QVariant::DateTime:
                     return DATETIME;
                 case QVariant::List:
+                case QVariant::StringList:
                     return LIST;
                 case QVariant::Map:
                     return DICT;

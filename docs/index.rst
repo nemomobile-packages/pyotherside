@@ -13,7 +13,7 @@ At its core, PyOtherSide is basically a simple layer that converts Qt (QML)
 objects to Python objects and vice versa, with focus on asynchronous events
 and continuation-passing style function calls.
 
-While PyOtherSide once worked with Qt 4.x, and still works with Python 2.7, its
+While legacy versions of PyOtherSide worked with Qt 4.x and Python 2.x, its
 focus now lies on Python 3.x and Qt 5. Python 3 has been out for several years,
 and offers some nice language features and clean-ups, while Qt 5 supports most
 mobile platforms well, and has an improved QML engine and a faster renderer (Qt
@@ -28,7 +28,7 @@ This section describes the QML API exposed by the *PyOtherSide* QML Plugin.
 Import Versions
 ---------------
 
-The current QML API version of PyOtherSide is 1.2. When new features are
+The current QML API version of PyOtherSide is 1.3. When new features are
 introduced, or behavior is changed, the API version will be bumped and
 documented here.
 
@@ -48,6 +48,13 @@ io.thp.pyotherside 1.2
   :func:`importModule` or :func:`call`, the signal :func:`error` is emitted
   with the exception information (filename, line, message) as ``traceback``.
 
+io.thp.pyotherside 1.3
+``````````````````````
+
+* :func:`addImportPath` now also accepts ``qrc:/`` URLs. This is useful if
+  your Python files are embedded as Qt Resources, relative to your QML files
+  (use :func:`Qt.resolvedUrl` from the QML file).
+
 QML ``Python`` Element
 ----------------------
 
@@ -60,7 +67,7 @@ To use the ``Python`` element in a QML file, you have to import the plugin using
 
 .. code-block:: javascript
 
-    import io.thp.pyotherside 1.2
+    import io.thp.pyotherside 1.3
 
 Signals
 ```````
@@ -89,12 +96,18 @@ path and then importing the module asynchronously:
 
 .. function:: addImportPath(string path)
 
-    Add a local filesystem path to Python's ``sys.path``.
+    Add a path to Python's ``sys.path``.
 
 .. versionchanged:: 1.1.0
     :func:`addImportPath` will automatically strip a leading
     ``file://`` from the path, so you can use :func:`Qt.resolvedUrl()`
     without having to manually strip the leading ``file://`` in QML.
+
+.. versionchanged:: 1.3.0
+    Starting with QML API version 1.3 (``import io.thp.pyotherside 1.3``),
+    :func:`addImportPath` now also accepts ``qrc:/`` URLs. The first time
+    a ``qrc:/`` path is added, a new import handler will be installed,
+    which will enable Python to transparently import modules from it.
 
 .. function:: importModule(string name, function callback(success) {})
 
@@ -104,7 +117,7 @@ path and then importing the module asynchronously:
     Previously, this function didn't work correctly for importing
     modules with dots in their name. Starting with the API version 1.2
     (``import io.thp.pyotherside 1.2``), this behavior is now fixed,
-    and ``importModule('x.y.z, ...)`` behaves like ``import x.y.z``.
+    and ``importModule('x.y.z', ...)`` behaves like ``import x.y.z``.
 
 .. versionchanged:: 1.2.0
     If a JavaScript exception occurs in the callback, the :func:`error`
@@ -152,7 +165,7 @@ plugin and Python interpreter.
 .. note::
     This is not necessarily the same as the QML API version currently in use.
     The QML API version is decided by the QML import statement, so even if
-    :func:`pluginVersion`` returns 1.2.0, if the plugin has been imported as
+    :func:`pluginVersion` returns 1.2.0, if the plugin has been imported as
     ``import io.thp.pyotherside 1.0``, the API version used would be 1.0.
 
 .. versionadded:: 1.1.0
@@ -201,6 +214,42 @@ Methods
 
 .. versionadded:: 1.1.0
 
+.. function:: pyotherside.qrc_is_file(filename)
+
+    Check if ``filename`` is an existing file in the `Qt Resource System`_.
+
+    :returns: ``True`` if ``filename`` is a file, ``False`` otherwise.
+
+.. versionadded:: 1.3.0
+
+.. function:: pyotherside.qrc_is_dir(dirname)
+
+    Check if ``dirname`` is an existing directory in the `Qt Resource System`_.
+
+    :returns: ``True`` if ``dirname`` is a directory, ``False`` otherwise.
+
+.. versionadded:: 1.3.0
+
+.. function:: pyotherside.qrc_get_file_contents(filename)
+
+    Get the file contents of a file in the `Qt Resource System`_.
+
+    :raise ValueError: If ``filename`` does not denote a valid file.
+    :returns: The file contents as Python ``bytearray`` object.
+
+.. versionadded:: 1.3.0
+
+.. function:: pyotherside.qrc_list_dir(dirname)
+
+    Get the entry list of a directory in the `Qt Resource System`_.
+
+    :raise ValueError: If ``dirname`` does not denote a valid directory.
+    :returns: The directory entries as list of strings.
+
+.. versionadded:: 1.3.0
+
+.. _Qt Resource System: http://qt-project.org/doc/qt-5/resources.html
+
 .. _constants:
 
 Constants
@@ -240,6 +289,14 @@ These constants are used in the return value of a `image provider`_ function:
 **pyotherside.format_data**
     Encoded image file data (e.g. PNG/JPEG data).
 
+.. versionadded:: 1.3.0
+
+The following constants have been added in PyOtherSide 1.3:
+
+**pyotherside.version**
+    Version of PyOtherSide as string.
+
+
 
 Data Type Mapping
 =================
@@ -260,10 +317,10 @@ between Python and QML (and vice versa):
 +--------------------+------------+-----------------------------+
 | str                | string     |                             |
 +--------------------+------------+-----------------------------+
-| list               | JS Array   |                             |
+| list               | JS Array   | JS Arrays are always        |
+|                    |            | converted to Python lists.  |
 +--------------------+------------+-----------------------------+
-| tuple              | JS Array   | JS Arrays are converted to  |
-|                    |            | lists, not tuples           |
+| tuple              | JS Array   |                             |
 +--------------------+------------+-----------------------------+
 | dict               | JS Object  | Keys must be strings        |
 +--------------------+------------+-----------------------------+
@@ -272,6 +329,10 @@ between Python and QML (and vice versa):
 | datetime.time      | QML time   | since PyOtherSide 1.2.0     |
 +--------------------+------------+-----------------------------+
 | datetime.datetime  | JS Date    | since PyOtherSide 1.2.0     |
++--------------------+------------+-----------------------------+
+| set                | JS Array   | since PyOtherSide 1.3.0     |
++--------------------+------------+-----------------------------+
+| iterable           | JS Array   | since PyOtherSide 1.3.0     |
 +--------------------+------------+-----------------------------+
 
 Trying to pass in other types than the ones listed here is undefined
@@ -340,6 +401,42 @@ the ``source`` property on a QML ``Image`` element only happens *after*
 the image provider has been set (e.g. by setting the ``source`` property
 in the callback function passed to :func:`importModule`).
 
+.. _qt resource access:
+
+Qt Resource Access
+==================
+
+.. versionadded:: 1.3.0
+
+If you are using PyOtherSide in combination with an application binary compiled
+from C++ code with Qt Resources (see `Qt Resource System`_), you can inspect
+and access the resources from Python. This example demonstrates the API by
+walking the whole resource tree, printing out directory names and file sizes:
+
+.. code-block:: python
+
+    import pyotherside
+    import os.path
+
+    def walk(root):
+        for entry in pyotherside.qrc_list_dir(root):
+            name = os.path.join(root, entry)
+            if pyotherside.qrc_is_dir(name):
+                print('Directory:', name)
+                walk(name)
+            else:
+                data = pyotherside.qrc_get_file_contents(name)
+                print('File:', name, 'has', len(data), 'bytes')
+
+    walk('/')
+
+
+Importing Python modules from Qt Resources also works starting with QML API 1.3
+using :func:`Qt.resolvedUrl` from within a QML file in Qt Resources. As an
+alternative, ``addImportPath('qrc:/')`` will add the root directory of the Qt
+Resources to Python's module search path.
+
+
 Cookbook
 ========
 
@@ -381,6 +478,36 @@ UI is always responsive. The user will be able to interact with the GUI (e.g.
 scroll and move around in the UI) while the Python code can process requests.
 
 .. _Continuation-passing style: https://en.wikipedia.org/wiki/Continuation-passing_style
+
+To avoid what's called `callback hell`_ in JavaScript, you can pull out the
+anonymous functions you give as callbacks, give them names and pass them to
+the API functions via name, e.g. the above example would turn into a shallow
+structure (of course, in this example, splitting everything out does not make
+too much sense, as the functions are very simple to begin with, but it's here
+to demonstrate how splitting a callback hell pyramid basically works):
+
+.. _callback hell: http://callbackhell.com/
+
+.. code-block:: javascript
+
+    Python {
+        Component.onCompleted: {
+            function changedCwd(result) {
+                console.log('Working directory changed.');
+            }
+
+            function gotCwd(result) {
+                console.log('Working directory: ' + result);
+                call('os.chdir', ['/'], changedCwd);
+            }
+
+            function withOs() {
+                call('os.getcwd', [], gotCwd);
+            }
+
+            importModule('os', withOs);
+        }
+    }
 
 Evaluating Python expressions in QML
 ````````````````````````````````````
@@ -531,7 +658,7 @@ Using this function from QML is straightforward:
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.2
+    import io.thp.pyotherside 1.3
 
     Rectangle {
         color: 'black'
@@ -579,6 +706,8 @@ them to the list model that way.
 Rendering RGBA image data in Python
 -----------------------------------
 
+.. versionadded:: 1.1.0
+
 .. image:: images/image_provider_example.png
 
 This example uses the `image provider`_ feature of PyOtherSide to
@@ -625,7 +754,7 @@ This module can now be imported in QML and used as ``source`` in the QML
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.2
+    import io.thp.pyotherside 1.3
 
     Image {
         id: image
@@ -645,7 +774,6 @@ This module can now be imported in QML and used as ``source`` in the QML
             onError: console.log('Python error: ' + traceback)
         }
     }
-
 
 Building PyOtherSide
 ====================
@@ -676,11 +804,7 @@ pass a suitable ``python-config`` to ``qmake`` at configure time:
 Alternatively, you can edit ``python.pri`` manually and specify the compiler
 flags for compiling and linking against Python on your system.
 
-As of version 1.1.0, PyOtherSide still builds against Python 2.x (tested with
-Python 2.7, use ``qmake PYTHON_CONFIG=python2.7-config``), but future point
-releases of PyOtherSide might drop support for Python 2.x. However, only one
-version of PyOtherSide can be installed/active at one time. It is highly
-recommended that you do not use Python 2 support except on legacy platforms.
+As of version 1.3.0, PyOtherSide does not build against Python 2.x anymore.
 
 Building for Blackberry 10
 --------------------------
@@ -709,9 +833,79 @@ Python 3.2.2 headers (with ``pyconfig.h`` from the device):
 After installing PyOtherSide in the locally-build Qt 5 (cross-compiled for
 BB10), the QML plugins folder can be deployed with the .bar file.
 
+Building for Windows
+--------------------
+
+On Windows (tested versions: Windows 7), you need to download:
+
+1. Qt 5 (VS 2010) from `qt-project.org downloads`_ (tested: 5.2.1)
+2. `Visual C++ 2010 Express`_
+3. Python 3 from `python.org Windows downloads`_ (tested: 3.3.4)
+
+We use VS 2010 instead of MinGW, because the MinGW version of Qt depends on
+working OpenGL driver, whereas the non-OpenGL version uses Direct3D via ANGLE.
+Also, Python is built with Visual C++ 2010 Express (see `Compiling Python on
+Windows`_), so using the same toolchain when linking all three components (Qt,
+Python and PyOtherSide) together makes sense.
+
+The necessary customizations for building PyOtherSide successfully on Windows
+have been integrated recently, and are available since PyOtherSide 1.3.0.
+
+.. _qt-project.org downloads: http://qt-project.org/downloads
+.. _Visual C++ 2010 Express: http://www.visualstudio.com/en-us/downloads/download-visual-studio-vs#DownloadFamilies_4
+.. _python.org Windows downloads: http://python.org/downloads/windows/
+.. _Compiling Python on Windows: http://docs.python.org/devguide/setup.html#windows-compiling
+
+Once these pre-requisites are installed, you need to make some customizations
+to the build setup:
+
+1. In ``src/qmldir``: Change ``plugin pyothersideplugin`` to ``plugin
+   pyothersideplugin1``. This is needed, because on Windows, the library
+   version gets encoded into the library name.
+
+2. In ``python.pri``: Modify it so that the Python 3 ``libs/`` folder is
+   added to the linker path, and link against ``-lpython33``. Also, modify
+   it so that the Python 3 ``include/`` folder is added to the compiler flags.
+
+Example ``python.pri`` file for a standard Python 3.3 installation on Windows:
+
+.. code-block:: qmake
+
+    QMAKE_LIBS += -LC:\Python33\libs -lpython33
+    QMAKE_CXXFLAGS += -IC:\Python33\include\
+
+With the updated ``qmldir`` and ``python.pri`` files in place, simply open
+the ``pyotherside.pro`` project file in Qt Creator, and build the project.
+Configure a **Release Build**, and *disable* **Shadow Builds**.
+
+To install PyOtherSide into your Qt installation, so that the QML import works
+from other projects:
+
+1. Make sure the PyOtherSide project is opened in Qt Creator
+2. In the left column, select **Projects**
+3. Make sure the **Run** tab (Run Settings) of your project is selected
+4. In **Deployment**, click **Add Deploy Step** and select **Make**
+5. In the **Make arguments:** field, type ``install``
+6. Hit **Run** to install PyOtherSide in your local Qt folder
+7. Dismiss the "Custom Executable" dialog that pops up
+
+Known Problems:
+
+* **Qt Resource System** importing might not fully work on Windows
+
 
 ChangeLog
 =========
+
+Version 1.3.0 (2014-07-24)
+--------------------------
+
+* Access to the `Qt Resource System`_ from Python (see `Qt Resource Access`_).
+* QML API 1.3: Import from Qt Resources (:func:`addImportPath` with ``qrc:/``).
+* Add ``pyotherside.version`` constant to access version from Python as string.
+* Support for building on Windows, build instructions for Windows builds.
+* New data type conversions: Python ``set`` and iterable types (e.g. generator
+  expressions and generators) are converted to JS ``Array``.
 
 Version 1.2.0 (2014-02-16)
 --------------------------

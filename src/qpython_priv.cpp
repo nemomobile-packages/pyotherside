@@ -22,8 +22,24 @@
 
 #include <QImage>
 #include <QDebug>
+#include <QResource>
+#include <QFile>
+#include <QDir>
 
 static QPythonPriv *priv = NULL;
+
+static QString
+qstring_from_pyobject_arg(PyObject *object)
+{
+    PyObjectConverter conv;
+
+    if (conv.type(object) != PyObjectConverter::STRING) {
+        PyErr_SetString(PyExc_ValueError, "Argument must be a string");
+        return QString();
+    }
+
+    return QString::fromUtf8(conv.string(object));
+}
 
 PyObject *
 pyotherside_send(PyObject *self, PyObject *args)
@@ -58,14 +74,93 @@ pyotherside_set_image_provider(PyObject *self, PyObject *o)
     Py_RETURN_NONE;
 }
 
+PyObject *
+pyotherside_qrc_is_file(PyObject *self, PyObject *filename)
+{
+    QString qfilename = qstring_from_pyobject_arg(filename);
+
+    if (qfilename.isNull()) {
+        return NULL;
+    }
+
+    if (QFile(":" + qfilename).exists()) {
+        Py_RETURN_TRUE;
+    }
+
+    Py_RETURN_FALSE;
+}
+
+PyObject *
+pyotherside_qrc_is_dir(PyObject *self, PyObject *dirname)
+{
+    QString qdirname = qstring_from_pyobject_arg(dirname);
+
+    if (qdirname.isNull()) {
+        return NULL;
+    }
+
+    if (QDir(":" + qdirname).exists()) {
+        Py_RETURN_TRUE;
+    }
+
+    Py_RETURN_FALSE;
+}
+
+PyObject *
+pyotherside_qrc_get_file_contents(PyObject *self, PyObject *filename)
+{
+    QString qfilename = qstring_from_pyobject_arg(filename);
+
+    if (qfilename.isNull()) {
+        return NULL;
+    }
+
+    QFile file(":" + qfilename);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+        PyErr_SetString(PyExc_ValueError, "File not found");
+        return NULL;
+    }
+
+    QByteArray ba = file.readAll();
+    return PyByteArray_FromStringAndSize(ba.constData(), ba.size());
+}
+
+PyObject *
+pyotherside_qrc_list_dir(PyObject *self, PyObject *dirname)
+{
+    QString qdirname = qstring_from_pyobject_arg(dirname);
+
+    if (qdirname.isNull()) {
+        return NULL;
+    }
+
+    QDir dir(":" + qdirname);
+    if (!dir.exists()) {
+        PyErr_SetString(PyExc_ValueError, "Directory not found");
+        return NULL;
+    }
+
+    return convertQVariantToPyObject(dir.entryList());
+}
+
 static PyMethodDef PyOtherSideMethods[] = {
+    /* Introduced in PyOtherSide 1.0 */
     {"send", pyotherside_send, METH_VARARGS, "Send data to Qt."},
     {"atexit", pyotherside_atexit, METH_O, "Function to call on shutdown."},
+
+    /* Introduced in PyOtherSide 1.1 */
     {"set_image_provider", pyotherside_set_image_provider, METH_O, "Set the QML image provider."},
+
+    /* Introduced in PyOtherSide 1.3 */
+    {"qrc_is_file", pyotherside_qrc_is_file, METH_O, "Check if a file exists in Qt Resources."},
+    {"qrc_is_dir", pyotherside_qrc_is_dir, METH_O, "Check if a directory exists in Qt Resources."},
+    {"qrc_get_file_contents", pyotherside_qrc_get_file_contents, METH_O, "Get file contents from a Qt Resource."},
+    {"qrc_list_dir", pyotherside_qrc_list_dir, METH_O, "Get directory entries from a Qt Resource."},
+
+    /* sentinel */
     {NULL, NULL, 0, NULL},
 };
 
-#ifdef PY3K
 static struct PyModuleDef PyOtherSideModule = {
     PyModuleDef_HEAD_INIT,
     "pyotherside",   /* name of module */
@@ -94,9 +189,11 @@ PyOtherSide_init()
     // Custom constant - pixels are to be interpreted as encoded image file data
     PyModule_AddIntConstant(pyotherside, "format_data", -1);
 
+    // Version of PyOtherSide (new in 1.3)
+    PyModule_AddStringConstant(pyotherside, "version", PYOTHERSIDE_VERSION);
+
     return pyotherside;
 }
-#endif
 
 QPythonPriv::QPythonPriv()
     : locals(NULL)
@@ -107,9 +204,7 @@ QPythonPriv::QPythonPriv()
     , traceback_mod(NULL)
     , mutex()
 {
-#ifdef PY3K
     PyImport_AppendInittab("pyotherside", PyOtherSide_init);
-#endif
 
     Py_Initialize();
     PyEval_InitThreads();
@@ -122,10 +217,6 @@ QPythonPriv::QPythonPriv()
 
     traceback_mod = PyImport_ImportModule("traceback");
     assert(traceback_mod != NULL);
-
-#ifndef PY3K
-    Py_InitModule("pyotherside", PyOtherSideMethods);
-#endif
 
     priv = this;
 
@@ -282,4 +373,50 @@ QPythonPriv *
 QPythonPriv::instance()
 {
     return priv;
+}
+
+QString
+QPythonPriv::importFromQRC(const char *module, const QString &filename)
+{
+    PyObject *sys_modules = PySys_GetObject((char *)"modules");
+    if (!PyMapping_Check(sys_modules)) {
+        return QString("sys.modules is not a mapping object");
+    }
+
+    PyObject *qrc_importer = PyMapping_GetItemString(sys_modules,
+            (char *)module);
+
+    if (qrc_importer == NULL) {
+        PyErr_Clear();
+
+        QFile qrc_importer_code(":" + filename);
+        if (!qrc_importer_code.open(QIODevice::ReadOnly)) {
+            return QString("Cannot load qrc importer source");
+        }
+
+        QByteArray ba = qrc_importer_code.readAll();
+        QByteArray fn = QString("qrc:/" + filename).toUtf8();
+
+        PyObject *co = Py_CompileString(ba.constData(), fn.constData(),
+                Py_file_input);
+        if (co == NULL) {
+            QString result = QString("Cannot compile qrc importer: %1")
+                .arg(formatExc());
+            PyErr_Clear();
+            return result;
+        }
+
+        qrc_importer = PyImport_ExecCodeModule((char *)module, co);
+        if (qrc_importer == NULL) {
+            QString result = QString("Cannot exec qrc importer: %1")
+                    .arg(formatExc());
+            PyErr_Clear();
+            return result;
+        }
+        Py_XDECREF(co);
+    }
+
+    Py_XDECREF(qrc_importer);
+
+    return QString();
 }
