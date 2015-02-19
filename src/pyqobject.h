@@ -1,7 +1,7 @@
 
 /**
  * PyOtherSide: Asynchronous Python 3 Bindings for Qt 5
- * Copyright (c) 2011, 2013, 2014, Thomas Perl <m@thp.io>
+ * Copyright (c) 2014, Thomas Perl <m@thp.io>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,33 +16,24 @@
  * PERFORMANCE OF THIS SOFTWARE.
  **/
 
-#ifndef PYOTHERSIDE_QPYTHON_WORKER_H
-#define PYOTHERSIDE_QPYTHON_WORKER_H
+#ifndef PYOTHERSIDE_PYQOBJECT_H
+#define PYOTHERSIDE_PYQOBJECT_H
 
-#include <QObject>
-#include <QString>
-#include <QVariant>
-#include <QJSValue>
+#include "Python.h"
 
-class QPython;
+#include "qobject_ref.h"
 
-class QPythonWorker : public QObject {
-    Q_OBJECT
+typedef struct {
+    PyObject_HEAD
+    QObjectRef *m_qobject_ref;
+} pyotherside_QObject;
 
-    public:
-        QPythonWorker(QPython *qpython);
-        ~QPythonWorker();
+typedef struct {
+    PyObject_HEAD
+    QObjectMethodRef *m_method_ref;
+} pyotherside_QObjectMethod;
 
-    public slots:
-        void process(QVariant func, QVariant args, QJSValue *callback);
-        void import(QString func, QJSValue *callback);
+extern PyTypeObject pyotherside_QObjectType;
+extern PyTypeObject pyotherside_QObjectMethodType;
 
-    signals:
-        void finished(QVariant result, QJSValue *callback);
-        void imported(bool result, QJSValue *callback);
-
-    private:
-        QPython *qpython;
-};
-
-#endif /* PYOTHERSIDE_QPYTHON_WORKER_H */
+#endif /* PYOTHERSIDE_PYQOBJECT_H */

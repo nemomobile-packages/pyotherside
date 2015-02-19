@@ -20,9 +20,11 @@
 #define PYOTHERSIDE_PYOBJECT_CONVERTER_H
 
 #include "converter.h"
+#include "pyqobject.h"
 
 #include "Python.h"
 #include "datetime.h"
+#include <QDebug>
 
 
 class PyObjectListBuilder : public ListBuilder<PyObject *> {
@@ -32,6 +34,7 @@ class PyObjectListBuilder : public ListBuilder<PyObject *> {
 
         virtual void append(PyObject *o) {
             PyList_Append(list, o);
+            Py_DECREF(o);
         }
 
         virtual PyObject * value() {
@@ -136,8 +139,14 @@ class PyObjectConverter : public Converter<PyObject *> {
             }
         }
 
-        virtual enum Type type(PyObject *&o) {
-            if (PyBool_Check(o)) {
+        virtual enum Type type(PyObject * const & o) {
+            if (PyObject_TypeCheck(o, &pyotherside_QObjectType)) {
+                return QOBJECT;
+            } else if (PyObject_TypeCheck(o, &pyotherside_QObjectMethodType)) {
+                qWarning("Cannot convert QObjectMethod yet - falling back to None");
+                // TODO: Implement passing QObjectMethod references around
+                return NONE;
+            } else if (PyBool_Check(o)) {
                 return BOOLEAN;
             } else if (PyLong_Check(o)) {
                 return INTEGER;
@@ -159,13 +168,9 @@ class PyObjectConverter : public Converter<PyObject *> {
                 return DICT;
             } else if (o == Py_None) {
                 return NONE;
+            } else {
+                return PYOBJECT;
             }
-
-            fprintf(stderr, "Warning: Cannot convert:");
-            PyObject_Print(o, stderr, 0);
-            fprintf(stderr, "\n");
-
-            return NONE;
         }
 
         virtual long long integer(PyObject *&o) { return PyLong_AsLong(o); }
@@ -205,6 +210,15 @@ class PyObjectConverter : public Converter<PyObject *> {
                     PyDateTime_DATE_GET_SECOND(o),
                     PyDateTime_DATE_GET_MICROSECOND(o) / 1000);
         }
+        virtual PyObjectRef pyObject(PyObject *&o) { return PyObjectRef(o); }
+        virtual QObjectRef qObject(PyObject *&o) {
+            if (PyObject_TypeCheck(o, &pyotherside_QObjectType)) {
+                pyotherside_QObject *result = reinterpret_cast<pyotherside_QObject *>(o);
+                return QObjectRef(*(result->m_qobject_ref));
+            }
+
+            return QObjectRef();
+        }
 
         virtual PyObject * fromInteger(long long v) { return PyLong_FromLong((long)v); }
         virtual PyObject * fromFloating(double v) { return PyFloat_FromDouble(v); }
@@ -214,6 +228,12 @@ class PyObjectConverter : public Converter<PyObject *> {
         virtual PyObject * fromTime(ConverterTime v) { return PyTime_FromTime(v.h, v.m, v.s, 1000 * v.ms); }
         virtual PyObject * fromDateTime(ConverterDateTime v) {
             return PyDateTime_FromDateAndTime(v.y, v.m, v.d, v.time.h, v.time.m, v.time.s, v.time.ms * 1000);
+        }
+        virtual PyObject * fromPyObject(const PyObjectRef &pyobj) { return pyobj.newRef(); }
+        virtual PyObject * fromQObject(const QObjectRef &qobj) {
+            pyotherside_QObject *result = PyObject_New(pyotherside_QObject, &pyotherside_QObjectType);
+            result->m_qobject_ref = new QObjectRef(qobj);
+            return reinterpret_cast<PyObject *>(result);
         }
         virtual ListBuilder<PyObject *> *newList() { return new PyObjectListBuilder(); }
         virtual DictBuilder<PyObject *> *newDict() { return new PyObjectDictBuilder(); }

@@ -20,11 +20,18 @@
 
 #include "qpython_priv.h"
 
+#include "ensure_gil_state.h"
+
 #include <QImage>
 #include <QDebug>
 #include <QResource>
 #include <QFile>
 #include <QDir>
+
+#include <QMetaObject>
+#include <QMetaProperty>
+#include <QMetaMethod>
+#include <QGenericArgument>
 
 static QPythonPriv *priv = NULL;
 
@@ -41,6 +48,57 @@ qstring_from_pyobject_arg(PyObject *object)
     return QString::fromUtf8(conv.string(object));
 }
 
+
+PyTypeObject pyotherside_QObjectType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "pyotherside.QObject", /* tp_name */
+    sizeof(pyotherside_QObject), /* tp_basicsize */
+    0, /* tp_itemsize */
+    0, /* tp_dealloc */
+    0, /* tp_print */
+    0, /* tp_getattr */
+    0, /* tp_setattr */
+    0, /* tp_reserved */
+    0, /* tp_repr */
+    0, /* tp_as_number */
+    0, /* tp_as_sequence */
+    0, /* tp_as_mapping */
+    0, /* tp_hash  */
+    0, /* tp_call */
+    0, /* tp_str */
+    0, /* tp_getattro */
+    0, /* tp_setattro */
+    0, /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT, /* tp_flags */
+    "Wrapped QObject", /* tp_doc */
+};
+
+PyTypeObject pyotherside_QObjectMethodType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    "pyotherside.QObjectMethod", /* tp_name */
+    sizeof(pyotherside_QObjectMethod), /* tp_basicsize */
+    0, /* tp_itemsize */
+    0, /* tp_dealloc */
+    0, /* tp_print */
+    0, /* tp_getattr */
+    0, /* tp_setattr */
+    0, /* tp_reserved */
+    0, /* tp_repr */
+    0, /* tp_as_number */
+    0, /* tp_as_sequence */
+    0, /* tp_as_mapping */
+    0, /* tp_hash  */
+    0, /* tp_call */
+    0, /* tp_str */
+    0, /* tp_getattro */
+    0, /* tp_setattro */
+    0, /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT, /* tp_flags */
+    "Bound method of wrapped QObject", /* tp_doc */
+};
+
+
+
 PyObject *
 pyotherside_send(PyObject *self, PyObject *args)
 {
@@ -51,12 +109,7 @@ pyotherside_send(PyObject *self, PyObject *args)
 PyObject *
 pyotherside_atexit(PyObject *self, PyObject *o)
 {
-    if (priv->atexit_callback != NULL) {
-        Py_DECREF(priv->atexit_callback);
-    }
-
-    Py_INCREF(o);
-    priv->atexit_callback = o;
+    priv->atexit_callback = PyObjectRef(o);
 
     Py_RETURN_NONE;
 }
@@ -64,12 +117,7 @@ pyotherside_atexit(PyObject *self, PyObject *o)
 PyObject *
 pyotherside_set_image_provider(PyObject *self, PyObject *o)
 {
-    if (priv->image_provider != NULL) {
-        Py_DECREF(priv->image_provider);
-    }
-
-    Py_INCREF(o);
-    priv->image_provider = o;
+    priv->image_provider = PyObjectRef(o);
 
     Py_RETURN_NONE;
 }
@@ -143,6 +191,225 @@ pyotherside_qrc_list_dir(PyObject *self, PyObject *dirname)
     return convertQVariantToPyObject(dir.entryList());
 }
 
+void
+pyotherside_QObject_dealloc(pyotherside_QObject *self)
+{
+    delete self->m_qobject_ref;
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+PyObject *
+pyotherside_QObject_repr(PyObject *o)
+{
+    if (!PyObject_TypeCheck(o, &pyotherside_QObjectType)) {
+        return PyErr_Format(PyExc_TypeError, "Not a pyotherside.QObject");
+    }
+
+    pyotherside_QObject *pyqobject = reinterpret_cast<pyotherside_QObject *>(o);
+    QObjectRef *ref = pyqobject->m_qobject_ref;
+    if (ref) {
+        QObject *qobject = ref->value();
+        const QMetaObject *metaObject = qobject->metaObject();
+
+        return PyUnicode_FromFormat("<pyotherside.QObject wrapper for %s at %p>",
+                metaObject->className(), qobject);
+    }
+
+    return PyUnicode_FromFormat("<dangling pyotherside.QObject wrapper>");
+}
+
+PyObject *
+pyotherside_QObject_getattro(PyObject *o, PyObject *attr_name)
+{
+    if (!PyObject_TypeCheck(o, &pyotherside_QObjectType)) {
+        return PyErr_Format(PyExc_TypeError, "Not a pyotherside.QObject");
+    }
+
+    if (!PyUnicode_Check(attr_name)) {
+        return PyErr_Format(PyExc_TypeError, "attr_name must be a string");
+    }
+
+    pyotherside_QObject *pyqobject = reinterpret_cast<pyotherside_QObject *>(o);
+    QObjectRef *ref = pyqobject->m_qobject_ref;
+    if (!ref) {
+        return PyErr_Format(PyExc_ValueError, "Dangling QObject");
+    }
+    QObject *qobject = ref->value();
+    if (!qobject) {
+        return PyErr_Format(PyExc_ReferenceError, "Referenced QObject was deleted");
+    }
+
+    const QMetaObject *metaObject = qobject->metaObject();
+    QString attrName = convertPyObjectToQVariant(attr_name).toString();
+
+    for (int i=0; i<metaObject->propertyCount(); i++) {
+        QMetaProperty property = metaObject->property(i);
+        if (attrName == property.name()) {
+            return convertQVariantToPyObject(property.read(qobject));
+        }
+    }
+
+    for (int i=0; i<metaObject->methodCount(); i++) {
+        QMetaMethod method = metaObject->method(i);
+        if (attrName == method.name()) {
+            pyotherside_QObjectMethod *result = PyObject_New(pyotherside_QObjectMethod,
+                    &pyotherside_QObjectMethodType);
+            result->m_method_ref = new QObjectMethodRef(*ref, attrName);
+            return reinterpret_cast<PyObject *>(result);
+        }
+    }
+
+    return PyErr_Format(PyExc_AttributeError, "Not a valid attribute");
+}
+
+int
+pyotherside_QObject_setattro(PyObject *o, PyObject *attr_name, PyObject *v)
+{
+    if (!PyObject_TypeCheck(o, &pyotherside_QObjectType)) {
+        PyErr_Format(PyExc_TypeError, "Not a pyotherside.QObject");
+        return -1;
+    }
+
+    if (!PyUnicode_Check(attr_name)) {
+        PyErr_Format(PyExc_TypeError, "attr_name must be a string");
+        return -1;
+    }
+
+    pyotherside_QObject *pyqobject = reinterpret_cast<pyotherside_QObject *>(o);
+    QObjectRef *ref = pyqobject->m_qobject_ref;
+    if (!ref) {
+        PyErr_Format(PyExc_ValueError, "Dangling QObject");
+        return -1;
+    }
+    QObject *qobject = ref->value();
+    if (!qobject) {
+        PyErr_Format(PyExc_ReferenceError, "Referenced QObject was deleted");
+        return -1;
+    }
+
+    const QMetaObject *metaObject = qobject->metaObject();
+    QString attrName = convertPyObjectToQVariant(attr_name).toString();
+
+    for (int i=0; i<metaObject->propertyCount(); i++) {
+        QMetaProperty property = metaObject->property(i);
+        if (attrName == property.name()) {
+            QVariant variant(convertPyObjectToQVariant(v));
+            if (!property.write(qobject, variant)) {
+                PyErr_Format(PyExc_AttributeError, "Could not set property %s to %s(%s)",
+                        attrName.toUtf8().constData(),
+                        variant.typeName(),
+                        variant.toString().toUtf8().constData());
+                return -1;
+            }
+
+            return 0;
+        }
+    }
+
+    PyErr_Format(PyExc_AttributeError, "Property does not exist: %s",
+            attrName.toUtf8().constData());
+    return -1;
+}
+
+void
+pyotherside_QObjectMethod_dealloc(pyotherside_QObjectMethod *self)
+{
+    delete self->m_method_ref;
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+PyObject *
+pyotherside_QObjectMethod_repr(PyObject *o)
+{
+    if (!PyObject_TypeCheck(o, &pyotherside_QObjectMethodType)) {
+        return PyErr_Format(PyExc_TypeError, "Not a pyotherside.QObjectMethod");
+    }
+
+    pyotherside_QObjectMethod *pyqobjectmethod = reinterpret_cast<pyotherside_QObjectMethod *>(o);
+
+    QObjectMethodRef *ref = pyqobjectmethod->m_method_ref;
+    if (!ref) {
+        return PyUnicode_FromFormat("<dangling pyotherside.QObjectMethod>");
+    }
+
+    QObjectRef oref = ref->object();
+    QObject *qobject = oref.value();
+    if (!qobject) {
+        return PyUnicode_FromFormat("<pyotherside.QObjectMethod '%s' bound to deleted QObject>",
+                ref->method().toUtf8().constData());
+    }
+
+    const QMetaObject *metaObject = qobject->metaObject();
+    return PyUnicode_FromFormat("<pyotherside.QObjectMethod '%s' bound to %s at %p>",
+            ref->method().toUtf8().constData(), metaObject->className(), qobject);
+}
+
+
+PyObject *
+pyotherside_QObjectMethod_call(PyObject *callable_object, PyObject *args, PyObject *kw)
+{
+    if (!PyObject_TypeCheck(callable_object, &pyotherside_QObjectMethodType)) {
+        return PyErr_Format(PyExc_TypeError, "Not a pyotherside.QObjectMethod");
+    }
+
+    if (!PyTuple_Check(args)) {
+        return PyErr_Format(PyExc_TypeError, "Argument list not a tuple");
+    }
+
+    if (kw) {
+        if (!PyMapping_Check(kw)) {
+            return PyErr_Format(PyExc_TypeError, "Keyword arguments not a mapping");
+        }
+
+        if (PyMapping_Size(kw) > 0) {
+            return PyErr_Format(PyExc_ValueError, "Keyword arguments not supported");
+        }
+    }
+
+    QList<QVariant> qargs = convertPyObjectToQVariant(args).toList();
+
+    pyotherside_QObjectMethod *pyqobjectmethod = reinterpret_cast<pyotherside_QObjectMethod *>(callable_object);
+    QObjectMethodRef *ref = pyqobjectmethod->m_method_ref;
+    if (!ref) {
+        return PyErr_Format(PyExc_ValueError, "Dangling QObject");
+    }
+
+    QList<QGenericArgument> genericArguments;
+    for (int j=0; j<qargs.size(); j++) {
+        const QVariant& argument = qargs[j];
+        genericArguments.append(QGenericArgument(argument.typeName(), argument.constData()));
+    }
+
+    QObject *o = ref->object().value();
+    if (!o) {
+        return PyErr_Format(PyExc_ReferenceError, "Referenced QObject was deleted");
+    }
+    const QMetaObject *metaObject = o->metaObject();
+
+    for (int i=0; i<metaObject->methodCount(); i++) {
+        QMetaMethod method = metaObject->method(i);
+
+        if (method.name() == ref->method()) {
+            QVariant result;
+            if (method.invoke(o, Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariant, result), genericArguments.value(0),
+                    genericArguments.value(1), genericArguments.value(2),
+                    genericArguments.value(3), genericArguments.value(4),
+                    genericArguments.value(5), genericArguments.value(6),
+                    genericArguments.value(7), genericArguments.value(8),
+                    genericArguments.value(9))) {
+                return convertQVariantToPyObject(result);
+            }
+
+            return PyErr_Format(PyExc_RuntimeError, "QObject method call failed");
+        }
+    }
+
+    return PyErr_Format(PyExc_RuntimeError, "QObject method not found: %s",
+            ref->method().toUtf8().constData());
+}
+
+
 static PyMethodDef PyOtherSideMethods[] = {
     /* Introduced in PyOtherSide 1.0 */
     {"send", pyotherside_send, METH_VARARGS, "Send data to Qt."},
@@ -192,70 +459,81 @@ PyOtherSide_init()
     // Version of PyOtherSide (new in 1.3)
     PyModule_AddStringConstant(pyotherside, "version", PYOTHERSIDE_VERSION);
 
+    // QObject wrappers (new in 1.4)
+    pyotherside_QObjectType.tp_new = PyType_GenericNew;
+    pyotherside_QObjectType.tp_repr = pyotherside_QObject_repr;
+    pyotherside_QObjectType.tp_getattro = pyotherside_QObject_getattro;
+    pyotherside_QObjectType.tp_setattro = pyotherside_QObject_setattro;
+    pyotherside_QObjectType.tp_dealloc = (destructor)pyotherside_QObject_dealloc;
+    if (PyType_Ready(&pyotherside_QObjectType) < 0) {
+        qFatal("Could not initialize QObjectType");
+        // Not reached
+        return NULL;
+    }
+    Py_INCREF(&pyotherside_QObjectType);
+    PyModule_AddObject(pyotherside, "QObject", (PyObject *)(&pyotherside_QObjectType));
+
+    pyotherside_QObjectMethodType.tp_new = PyType_GenericNew;
+    pyotherside_QObjectMethodType.tp_repr = pyotherside_QObjectMethod_repr;
+    pyotherside_QObjectMethodType.tp_call = pyotherside_QObjectMethod_call;
+    pyotherside_QObjectMethodType.tp_dealloc = (destructor)pyotherside_QObjectMethod_dealloc;
+    if (PyType_Ready(&pyotherside_QObjectMethodType) < 0) {
+        qFatal("Could not initialize QObjectMethodType");
+        // Not reached
+        return NULL;
+    }
+    Py_INCREF(&pyotherside_QObjectMethodType);
+    PyModule_AddObject(pyotherside, "QObjectMethod", (PyObject *)(&pyotherside_QObjectMethodType));
+
     return pyotherside;
 }
 
 QPythonPriv::QPythonPriv()
-    : locals(NULL)
-    , globals(NULL)
-    , state(NULL)
-    , atexit_callback(NULL)
-    , image_provider(NULL)
-    , traceback_mod(NULL)
-    , mutex()
+    : locals()
+    , globals()
+    , atexit_callback()
+    , image_provider()
+    , traceback_mod()
+    , pyotherside_mod()
+    , thread_state(NULL)
 {
     PyImport_AppendInittab("pyotherside", PyOtherSide_init);
 
-    Py_Initialize();
+    Py_InitializeEx(0);
     PyEval_InitThreads();
 
-    locals = PyDict_New();
-    assert(locals != NULL);
+    locals = PyObjectRef(PyDict_New(), true);
+    assert(locals);
 
-    globals = PyDict_New();
-    assert(globals != NULL);
+    globals = PyObjectRef(PyDict_New(), true);
+    assert(globals);
 
-    traceback_mod = PyImport_ImportModule("traceback");
-    assert(traceback_mod != NULL);
+    traceback_mod = PyObjectRef(PyImport_ImportModule("traceback"), true);
+    assert(traceback_mod);
 
     priv = this;
 
-    if (PyDict_GetItemString(globals, "__builtins__") == NULL) {
-        PyDict_SetItemString(globals, "__builtins__",
+    if (PyDict_GetItemString(globals.borrow(), "__builtins__") == NULL) {
+        PyDict_SetItemString(globals.borrow(), "__builtins__",
                 PyEval_GetBuiltins());
     }
 
-    // Need to lock mutex here, as it will always be unlocked
-    // by leave(). If we don't do that, it will be unlocked
-    // once too often resulting in undefined behavior.
-    mutex.lock();
-    leave();
+    // Need to "self-import" the pyotherside module here, so that Python code
+    // can use objects wrapped with pyotherside.QObject without crashing when
+    // the user's Python code doesn't "import pyotherside"
+    pyotherside_mod = PyObjectRef(PyImport_ImportModule("pyotherside"), true);
+    assert(pyotherside_mod);
+
+    // Release the GIL
+    thread_state = PyEval_SaveThread();
 }
 
 QPythonPriv::~QPythonPriv()
 {
-    enter();
-    Py_DECREF(traceback_mod);
-    Py_DECREF(globals);
-    Py_DECREF(locals);
+    // Re-acquire the previously-released GIL
+    PyEval_RestoreThread(thread_state);
+
     Py_Finalize();
-}
-
-void
-QPythonPriv::enter()
-{
-    mutex.lock();
-    assert(state != NULL);
-    PyEval_RestoreThread(state);
-    state = NULL;
-}
-
-void
-QPythonPriv::leave()
-{
-    assert(state == NULL);
-    state = PyEval_SaveThread();
-    mutex.unlock();
 }
 
 void
@@ -296,7 +574,7 @@ QPythonPriv::formatExc()
         goto cleanup;
     }
 
-    list = PyObject_CallMethod(traceback_mod,
+    list = PyObject_CallMethod(traceback_mod.borrow(),
             "format_exception", "OOO", type, value, traceback);
 
     if (list == NULL) {
@@ -340,7 +618,7 @@ QPythonPriv::eval(QString expr)
 {
     QByteArray utf8bytes = expr.toUtf8();
     PyObject *result = PyRun_String(utf8bytes.constData(),
-            Py_eval_input, globals, locals);
+            Py_eval_input, globals.borrow(), locals.borrow());
 
     return result;
 }
@@ -352,21 +630,16 @@ QPythonPriv::closing()
         return;
     }
 
-    priv->enter();
-    if (priv->atexit_callback != NULL) {
-        PyObject *args = PyTuple_New(0);
-        PyObject *result = PyObject_Call(priv->atexit_callback, args, NULL);
-        Py_DECREF(args);
-        Py_XDECREF(result);
+    ENSURE_GIL_STATE;
 
-        Py_DECREF(priv->atexit_callback);
-        priv->atexit_callback = NULL;
+    if (priv->atexit_callback) {
+        PyObjectRef args(PyTuple_New(0), true);
+        PyObjectRef result(PyObject_Call(priv->atexit_callback.borrow(), args.borrow(), NULL), true);
+        Q_UNUSED(result);
     }
-    if (priv->image_provider != NULL) {
-        Py_DECREF(priv->image_provider);
-        priv->image_provider = NULL;
-    }
-    priv->leave();
+
+    priv->atexit_callback = PyObjectRef();
+    priv->image_provider = PyObjectRef();
 }
 
 QPythonPriv *
@@ -378,15 +651,15 @@ QPythonPriv::instance()
 QString
 QPythonPriv::importFromQRC(const char *module, const QString &filename)
 {
-    PyObject *sys_modules = PySys_GetObject((char *)"modules");
-    if (!PyMapping_Check(sys_modules)) {
+    PyObjectRef sys_modules(PySys_GetObject((char *)"modules"), true);
+    if (!PyMapping_Check(sys_modules.borrow())) {
         return QString("sys.modules is not a mapping object");
     }
 
-    PyObject *qrc_importer = PyMapping_GetItemString(sys_modules,
-            (char *)module);
+    PyObjectRef qrc_importer(PyMapping_GetItemString(sys_modules.borrow(),
+            (char *)module), true);
 
-    if (qrc_importer == NULL) {
+    if (!qrc_importer) {
         PyErr_Clear();
 
         QFile qrc_importer_code(":" + filename);
@@ -397,26 +670,49 @@ QPythonPriv::importFromQRC(const char *module, const QString &filename)
         QByteArray ba = qrc_importer_code.readAll();
         QByteArray fn = QString("qrc:/" + filename).toUtf8();
 
-        PyObject *co = Py_CompileString(ba.constData(), fn.constData(),
-                Py_file_input);
-        if (co == NULL) {
+        PyObjectRef co(Py_CompileString(ba.constData(), fn.constData(),
+                Py_file_input), true);
+        if (!co) {
             QString result = QString("Cannot compile qrc importer: %1")
                 .arg(formatExc());
             PyErr_Clear();
             return result;
         }
 
-        qrc_importer = PyImport_ExecCodeModule((char *)module, co);
-        if (qrc_importer == NULL) {
+        qrc_importer = PyObjectRef(PyImport_ExecCodeModule((char *)module, co.borrow()), true);
+        if (!qrc_importer) {
             QString result = QString("Cannot exec qrc importer: %1")
                     .arg(formatExc());
             PyErr_Clear();
             return result;
         }
-        Py_XDECREF(co);
     }
 
-    Py_XDECREF(qrc_importer);
+    return QString();
+}
 
+QString
+QPythonPriv::call(PyObject *callable, QString name, QVariant args, QVariant *v)
+{
+    if (!PyCallable_Check(callable)) {
+        return QString("Not a callable: %1").arg(name);
+    }
+
+    PyObjectRef argl(convertQVariantToPyObject(args), true);
+    if (!PyList_Check(argl.borrow())) {
+        return QString("Not a parameter list in call to %1: %2")
+                .arg(name).arg(args.toString());
+    }
+
+    PyObjectRef argt(PyList_AsTuple(argl.borrow()), true);
+    PyObjectRef o(PyObject_Call(callable, argt.borrow(), NULL), true);
+
+    if (!o) {
+        return QString("Return value of PyObject call is NULL: %1").arg(priv->formatExc());
+    } else {
+        if (v != NULL) {
+            *v = convertPyObjectToQVariant(o.borrow());
+        }
+    }
     return QString();
 }

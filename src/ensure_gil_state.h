@@ -1,7 +1,8 @@
 
 /**
  * PyOtherSide: Asynchronous Python 3 Bindings for Qt 5
- * Copyright (c) 2011, 2013, 2014, Thomas Perl <m@thp.io>
+ * Copyright (c) 2014, Felix Krull <f_krull@gmx.de>
+ * Copyright (c) 2014, Thomas Perl <m@thp.io>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,33 +17,16 @@
  * PERFORMANCE OF THIS SOFTWARE.
  **/
 
-#ifndef PYOTHERSIDE_QPYTHON_WORKER_H
-#define PYOTHERSIDE_QPYTHON_WORKER_H
+#include "Python.h"
 
-#include <QObject>
-#include <QString>
-#include <QVariant>
-#include <QJSValue>
-
-class QPython;
-
-class QPythonWorker : public QObject {
-    Q_OBJECT
-
+class EnsureGILState {
     public:
-        QPythonWorker(QPython *qpython);
-        ~QPythonWorker();
-
-    public slots:
-        void process(QVariant func, QVariant args, QJSValue *callback);
-        void import(QString func, QJSValue *callback);
-
-    signals:
-        void finished(QVariant result, QJSValue *callback);
-        void imported(bool result, QJSValue *callback);
+        EnsureGILState() : gil_state(PyGILState_Ensure()) { }
+        ~EnsureGILState() { PyGILState_Release(gil_state); }
 
     private:
-        QPython *qpython;
+        PyGILState_STATE gil_state;
 };
 
-#endif /* PYOTHERSIDE_QPYTHON_WORKER_H */
+#define ENSURE_GIL_STATE EnsureGILState _ensure; Q_UNUSED(_ensure)
+

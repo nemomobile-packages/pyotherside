@@ -31,6 +31,14 @@ HEADERS += qpython_imageprovider.h
 # Importer from Qt Resources
 RESOURCES += qrc_importer.qrc
 
+# Embedded Python Library (add pythonlib.zip if you want this)
+exists (pythonlib.zip) {
+    RESOURCES += pythonlib_loader.qrc
+    DEFINES *= PYTHONLIB_LOADER_HAVE_PYTHONLIB_ZIP
+}
+HEADERS += pythonlib_loader.h
+SOURCES += pythonlib_loader.cpp
+
 # Python QML Object
 SOURCES += qpython.cpp
 HEADERS += qpython.h
@@ -42,6 +50,18 @@ HEADERS += qpython_priv.h
 # Globally Load Python hack
 SOURCES += global_libpython_loader.cpp
 HEADERS += global_libpython_loader.h
+
+# Reference-counting PyObject wrapper class
+SOURCES += pyobject_ref.cpp
+HEADERS += pyobject_ref.h
+
+# QObject wrapper class exposed to Python
+SOURCES += qobject_ref.cpp
+HEADERS += qobject_ref.h
+HEADERS += pyqobject.h
+
+# GIL helper
+HEADERS += ensure_gil_state.h
 
 # Type System Conversion Logic
 HEADERS += converter.h

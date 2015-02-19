@@ -19,6 +19,9 @@
 #ifndef PYOTHERSIDE_CONVERTER_H
 #define PYOTHERSIDE_CONVERTER_H
 
+#include "pyobject_ref.h"
+#include "qobject_ref.h"
+
 struct ConverterDate {
     ConverterDate(int y, int m, int d)
         : y(y), m(m), d(d)
@@ -102,9 +105,11 @@ class Converter {
             DATE,
             TIME,
             DATETIME,
+            PYOBJECT,
+            QOBJECT,
         };
 
-        virtual enum Type type(V&) = 0;
+        virtual enum Type type(const V&) = 0;
         virtual long long integer(V&) = 0;
         virtual double floating(V&) = 0;
         virtual bool boolean(V&) = 0;
@@ -114,6 +119,8 @@ class Converter {
         virtual ConverterDate date(V&) = 0;
         virtual ConverterTime time(V&) = 0;
         virtual ConverterDateTime dateTime(V&) = 0;
+        virtual PyObjectRef pyObject(V&) = 0;
+        virtual QObjectRef qObject(V&) = 0;
 
         virtual V fromInteger(long long v) = 0;
         virtual V fromFloating(double v) = 0;
@@ -122,6 +129,8 @@ class Converter {
         virtual V fromDate(ConverterDate date) = 0;
         virtual V fromTime(ConverterTime time) = 0;
         virtual V fromDateTime(ConverterDateTime dateTime) = 0;
+        virtual V fromPyObject(const PyObjectRef &pyobj) = 0;
+        virtual V fromQObject(const QObjectRef &qobj) = 0;
         virtual ListBuilder<V> *newList() = 0;
         virtual DictBuilder<V> *newDict() = 0;
         virtual V none() = 0;
@@ -186,6 +195,10 @@ convert(F from)
             return tconv.fromTime(fconv.time(from));
         case FC::DATETIME:
             return tconv.fromDateTime(fconv.dateTime(from));
+        case FC::PYOBJECT:
+            return tconv.fromPyObject(fconv.pyObject(from));
+        case FC::QOBJECT:
+            return tconv.fromQObject(fconv.qObject(from));
     }
 
     return tconv.none();

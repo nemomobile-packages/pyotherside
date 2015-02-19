@@ -19,6 +19,8 @@
 #ifndef PYOTHERSIDE_QPYTHON_H
 #define PYOTHERSIDE_QPYTHON_H
 
+#include "Python.h"
+
 #include <QVariant>
 #include <QObject>
 #include <QString>
@@ -202,12 +204,12 @@ class QPython : public QObject {
          * }
          * \endcode
          *
-         * \arg func The Python function to call
+         * \arg func The Python function to call (string or Python callable)
          * \arg args A list of arguments, or \c [] for no arguments
          * \arg callback A callback that receives the function call result
          **/
         Q_INVOKABLE void
-        call(QString func,
+        call(QVariant func,
              QVariant args=QVariantList(),
              QJSValue callback=QJSValue());
 
@@ -231,13 +233,34 @@ class QPython : public QObject {
          * }
          * \endcode
          *
-         * \arg func The Python function to call
+         * \arg func The Python function to call (string or Python callable)
          * \arg args A list of arguments, or \c [] for no arguments
          * \result The return value of the Python call as Qt data type
          **/
         Q_INVOKABLE QVariant
-        call_sync(QString func, QVariant args=QVariantList());
+        call_sync(QVariant func, QVariant args=QVariantList());
 
+        /**
+         * \brief Get an attribute value of a Python object synchronously
+         *
+         * \code
+         * Python {
+         *     Component.onCompleted: {
+         *         importModule('datetime', function() {
+         *             call('datetime.datetime.now', [], function(dt) {
+         *                 console.log('Year: ' + getattr(dt, 'year'));
+         *             });
+         *         });
+         *     }
+         * }
+         * \endcode
+         *
+         * \arg obj The Python object
+         * \arg attr The attribute to get
+         * \result The attribute value
+         **/
+        Q_INVOKABLE QVariant
+        getattr(QVariant obj, QString attr);
 
         /**
          * \brief Get the PyOtherSide version
@@ -279,7 +302,7 @@ class QPython : public QObject {
         void error(QString traceback);
 
         /* For internal use only */
-        void process(QString func, QVariant args, QJSValue *callback);
+        void process(QVariant func, QVariant args, QJSValue *callback);
         void import(QString name, QJSValue *callback);
 
     private slots:
@@ -287,6 +310,9 @@ class QPython : public QObject {
 
         void finished(QVariant result, QJSValue *callback);
         void imported(bool result, QJSValue *callback);
+
+        void connectNotify(const QMetaMethod &signal);
+        void disconnectNotify(const QMetaMethod &signal);
 
     private:
         static QPythonPriv *priv;
@@ -297,6 +323,9 @@ class QPython : public QObject {
 
         int api_version_major;
         int api_version_minor;
+
+        void emitError(const QString &message);
+        int error_connections;
 };
 
 class QPython10 : public QPython {
@@ -322,6 +351,15 @@ Q_OBJECT
 public:
     QPython13(QObject *parent=0)
         : QPython(parent, 1, 3)
+    {
+    }
+};
+
+class QPython14 : public QPython {
+Q_OBJECT
+public:
+    QPython14(QObject *parent=0)
+        : QPython(parent, 1, 4)
     {
     }
 };

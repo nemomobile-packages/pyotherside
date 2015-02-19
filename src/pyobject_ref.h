@@ -1,7 +1,8 @@
 
 /**
  * PyOtherSide: Asynchronous Python 3 Bindings for Qt 5
- * Copyright (c) 2011, 2013, 2014, Thomas Perl <m@thp.io>
+ * Copyright (c) 2014, Felix Krull <f_krull@gmx.de>
+ * Copyright (c) 2014, Thomas Perl <m@thp.io>
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,33 +17,29 @@
  * PERFORMANCE OF THIS SOFTWARE.
  **/
 
-#ifndef PYOTHERSIDE_QPYTHON_WORKER_H
-#define PYOTHERSIDE_QPYTHON_WORKER_H
+#ifndef PYOTHERSIDE_PYOBJECT_REF_H
+#define PYOTHERSIDE_PYOBJECT_REF_H
 
-#include <QObject>
-#include <QString>
-#include <QVariant>
-#include <QJSValue>
+#include "Python.h"
 
-class QPython;
+#include <QMetaType>
 
-class QPythonWorker : public QObject {
-    Q_OBJECT
-
+class PyObjectRef {
     public:
-        QPythonWorker(QPython *qpython);
-        ~QPythonWorker();
+        explicit PyObjectRef(PyObject *obj=0, bool consume=false);
+        PyObjectRef(const PyObjectRef &other);
+        virtual ~PyObjectRef();
+        PyObjectRef &operator=(const PyObjectRef &other);
 
-    public slots:
-        void process(QVariant func, QVariant args, QJSValue *callback);
-        void import(QString func, QJSValue *callback);
+        PyObject *newRef() const;
 
-    signals:
-        void finished(QVariant result, QJSValue *callback);
-        void imported(bool result, QJSValue *callback);
+        PyObject *borrow() const;
+        operator bool() const { return (pyobject != 0); }
 
     private:
-        QPython *qpython;
+        PyObject *pyobject;
 };
 
-#endif /* PYOTHERSIDE_QPYTHON_WORKER_H */
+Q_DECLARE_METATYPE(PyObjectRef)
+
+#endif // PYOTHERSIDE_PYOBJECT_REF_H

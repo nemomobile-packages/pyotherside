@@ -28,7 +28,7 @@ This section describes the QML API exposed by the *PyOtherSide* QML Plugin.
 Import Versions
 ---------------
 
-The current QML API version of PyOtherSide is 1.3. When new features are
+The current QML API version of PyOtherSide is 1.4. When new features are
 introduced, or behavior is changed, the API version will be bumped and
 documented here.
 
@@ -55,6 +55,18 @@ io.thp.pyotherside 1.3
   your Python files are embedded as Qt Resources, relative to your QML files
   (use :func:`Qt.resolvedUrl` from the QML file).
 
+io.thp.pyotherside 1.4
+``````````````````````
+
+* Added :func:`getattr`
+
+* :func:`call` and :func:`call_sync` now accept a Python callable object
+  for the first parameter (previously, only strings were supported)
+
+* If :func:`error` doesn't have a handler defined, error messages will be
+  printed to the console as warnings
+
+
 QML ``Python`` Element
 ----------------------
 
@@ -67,7 +79,7 @@ To use the ``Python`` element in a QML file, you have to import the plugin using
 
 .. code-block:: javascript
 
-    import io.thp.pyotherside 1.3
+    import io.thp.pyotherside 1.4
 
 Signals
 ```````
@@ -80,6 +92,12 @@ Signals
 .. function:: error(string traceback)
 
     Error handler for errors from Python.
+
+.. versionchanged:: 1.4.0
+    If the error signal is not connected, PyOtherSide will print the
+    error as QWarning on the console (previously, error messages
+    were only shown if the signal was connected and printed there).
+    To avoid printing the error, just define a no-op handler.
 
 Methods
 ```````
@@ -127,7 +145,7 @@ path and then importing the module asynchronously:
 Once modules are imported, Python function can be called on the
 imported modules using:
 
-.. function:: call(string func, args=[], function callback(result) {})
+.. function:: call(var func, args=[], function callback(result) {})
 
     Call the Python function ``func`` with ``args`` asynchronously.
     If ``args`` is omitted, ``func`` will be called without arguments.
@@ -138,6 +156,17 @@ imported modules using:
     If a JavaScript exception occurs in the callback, the :func:`error`
     signal is emitted with ``traceback`` containing the exception info
     (QML API version 1.2 and newer).
+
+.. versionchanged:: 1.4.0
+    ``func`` can also be a Python callable object, not just a string.
+
+Attributes on Python objects can be accessed using :func:`getattr`:
+
+.. function:: getattr(obj, string attr) -> var
+
+    Get the attribute ``attr`` of the Python object ``obj``.
+
+.. versionadded:: 1.4.0
 
 For some of these methods, there also exist synchronous variants, but it is
 highly recommended to use the asynchronous variants instead to avoid blocking
@@ -151,9 +180,12 @@ the QML UI thread:
 
     Import a Python module. Returns ``true`` on success, ``false`` otherwise.
 
-.. function:: call_sync(string func, var args=[]) -> var
+.. function:: call_sync(var func, var args=[]) -> var
 
     Call a Python function. Returns the return value of the Python function.
+
+.. versionchanged:: 1.4.0
+    ``func`` can also be a Python callable object, not just a string.
 
 The following functions allow access to the version of the running PyOtherSide
 plugin and Python interpreter.
@@ -334,6 +366,10 @@ between Python and QML (and vice versa):
 +--------------------+------------+-----------------------------+
 | iterable           | JS Array   | since PyOtherSide 1.3.0     |
 +--------------------+------------+-----------------------------+
+| object             | (opaque)   | since PyOtherSide 1.4.0     |
++--------------------+------------+-----------------------------+
+| pyotherside.QObject| QObject    | since PyOtherSide 1.4.0     |
++--------------------+------------+-----------------------------+
 
 Trying to pass in other types than the ones listed here is undefined
 behavior and will usually result in an error.
@@ -435,6 +471,59 @@ Importing Python modules from Qt Resources also works starting with QML API 1.3
 using :func:`Qt.resolvedUrl` from within a QML file in Qt Resources. As an
 alternative, ``addImportPath('qrc:/')`` will add the root directory of the Qt
 Resources to Python's module search path.
+
+.. _qobjects in python:
+
+Accessing QObjects from Python
+==============================
+
+.. versionadded:: 1.4.0
+
+Since version 1.4, PyOtherSide allows passing QObjects from QML to Python, and
+accessing (setting / getting) properties and calling slots and dynamic methods.
+References to QObjects passed to Python can be passed back to QML transparently:
+
+.. code-block:: python
+
+    # Assume func will be called with a QObject as sole argument
+    def func(qobject):
+        # Getting properties
+        print(qobject.x)
+
+        # Setting properties
+        qobject.x = 123
+
+        # Calling slots and dynamic functions
+        print(qobject.someFunction(123, 'b'))
+
+        # Returning a QObject reference to the caller
+        return qobject
+
+It is possible to store a reference (bound method) to a method of a QObject.
+Such references cannot be passed to QML, and can only be used in Python for the
+lifetime of the QObject. If you need to pass such a bound method to QML, you
+can wrap it into a Python object (or even just a lambda) and pass that instead:
+
+.. code-block:: python
+
+    def func(qobject):
+        # Can store a reference to a bound method
+        bound_method = qobject.someFunction
+
+        # Calling the bound method
+        bound_method(123, 'b')
+
+        # If you need to return the bound method, you must wrap it
+        # in a lambda (or any other Python object), the bound method
+        # cannot be returned as-is for now
+        return lambda a, b: bound_method(a, b)
+
+It's not possible to instantiate new QObjects from within Python, and it's
+not possible to subclass QObject from within Python. Also, be aware that a
+reference to a QObject in Python will become invalid when the QObject is
+deleted (there's no way for PyOtherSide to prevent referenced QObjects from
+being deleted, but PyOtherSide tries hard to detect the deletion of objects
+and give meaningful error messages in case the reference is accessed).
 
 
 Cookbook
@@ -658,7 +747,7 @@ Using this function from QML is straightforward:
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.3
+    import io.thp.pyotherside 1.4
 
     Rectangle {
         color: 'black'
@@ -754,7 +843,7 @@ This module can now be imported in QML and used as ``source`` in the QML
 .. code-block:: javascript
 
     import QtQuick 2.0
-    import io.thp.pyotherside 1.3
+    import io.thp.pyotherside 1.4
 
     Image {
         id: image
@@ -833,6 +922,120 @@ Python 3.2.2 headers (with ``pyconfig.h`` from the device):
 After installing PyOtherSide in the locally-build Qt 5 (cross-compiled for
 BB10), the QML plugins folder can be deployed with the .bar file.
 
+Building for Android
+--------------------
+
+Unlike Blackberry there is no Python or Qt present by default and both need to be shipped with the application.
+
+The current solution can be summarized like this:
+
+1. Statically cross-compile Python 3 for Android using the Android NDK
+2. Statically compile PyOtherSide against the Android Python build and bundle the Python standard library inside the PyOtherSide binary
+3. Use the Qt 5 SDK to make a QtQuick application - the SDK will handle bundling of your application file and of the PyOtherSide binary automatically
+
+A more detailed guide follows. It describes how to get from the source code of the relevant components to being able to run an Android application
+with a Qt Quick 2.0 GUI running on an Android device. The `gPodder` podcast aggregator serves as (full featured & fully functional!) example of such an application.
+
+Performed in this environment:
+
+ * Fedora 20
+ * Qt 5.3.1 Android SDK
+ * latest Android SDK with API level 14 installed
+ * OpenJDK 1.7
+ * a few GB of harddrive space
+ * an Android 4.0+ device connected to the computer that is accessible over ``adb`` (eq. the debugging mode is enabled)
+
+*This is just one example environment where these build instructions have been tested to work. Reasonably similar environments should work just as well.*
+
+The build is going to be done in a folder called ``build`` in the users home directory,
+lets say that the use is named ``user`` (replace accordingly for your environment).
+
+We start in the home directory:
+
+.. code-block:: sh
+
+    mkdir build
+    cd build
+
+Now clone the needed projects, load submodules and switch to correct branches.
+
+.. code-block:: sh
+
+    git clone --branch fixes https://github.com/thp/python3-android
+    git clone https://github.com/thp/pyotherside
+    git clone --recursive https://github.com/gpodder/gpodder-android
+
+Next we will build Python 3 for Android. This will first download the Android NDK, then Python 3 source code, followed by crosscompiling the Python 3 code for Android on ARM.
+*NOTE that this step alone can require multiple GB of harddisk space.*
+
+.. code-block:: sh
+
+    cd python3-android
+    make all
+
+As the next step we modify the ``python.pri.android`` file to point to our Python build. If should look like this as a result (remember to modify it for your environment):
+
+.. code-block:: qmake
+
+    QMAKE_LIBS += -L/home/user/build/python3-android/build/9d-14-arm-linux-androideabi-4.8/lib -lpython3.3m -ldl -lm -lc -lssl -lcrypto
+    QMAKE_CXXFLAGS += -I/home/user/build/python3-android/build/9d-14-arm-linux-androideabi-4.8/include/python3.3m/
+
+Then copy the file over the python.pri file in the PyOtherSide project directory:
+
+.. code-block:: sh
+
+    cd ..
+    cp python3-android/python.pri.android pyotherside/python.pri
+
+PyOtherSide can also help us ship & load the Python standard library if we can provide it a suitable zip bundle, which can be created like this:
+
+.. code-block:: sh
+
+    cd python3-android/build/9d-14-arm-linux-androideabi-4.8/lib/python3.3/
+    zip -r pythonlib.zip *
+    cd ../../../../..
+
+For PyOtherSide to include the packed Python standard library it needs to be placed in its src subfolder:
+
+.. code-block:: sh
+
+    mv python3-android/build/9d-14-arm-linux-androideabi-4.8/lib/python3.3/pythonlib.zip pyotherside/src/
+
+PyOtherSide will then use the qrc mechanism to compile the compressed standard library during inside it's own binary. This removes the need for us to handle its shipping & loading ourself.
+
+Next you need to build PyOtherSide with QtCreator from the Qt 5.3 Android SDK, so make sure that the Qt 5.3 Android kit is using the exact same NDK that has been used to build Python 3 for Android. To do that go to *settings*, find the *kits* section, select the Android kit and make sure that the NDK path points to:
+
+``/home/user/build/python3-android/sdk/android-ndk-r9d``
+
+Next open the pyotherside/pyotherside.pro project file on QtCreator, select the Android kit and once the project loads go to the *project view* and make sure that under *run* the API level is set to 14 (this corresponds to Android 4.0 and later). The Android Python 3 build has been built for API level 14 and our PyOtherSide build should do the same to be compatible. 
+
+Also make sure that shadow build is disabled, just in case.
+
+Once done with the configuration got to the *build* menu and select the *built pyotherside* option - this should build PyOtherSide for Android and statically compile in our Python build and also include the Python standard library zip file with qrc.
+
+As the next step we need to move the PyOtherSide binary to the QML plugin folder for the Qt Android SDK, so that it can be fetched by the SDK when building gPodder.
+
+Let's say we have the SDK installed in the ``/opt`` directory (default for the Qt SDK installer on Linux), giving us this path to the plugin folder:
+
+``/opt/Qt5.3/5.3/android_armv7/qml``
+
+First create the folder structure for the pyotherside plugin:
+
+.. code-block:: sh
+
+    mkdir -p /opt/Qt5.3/5.3/android_armv7/qml/io/thp/pyotherside
+
+Then copy the pyotherside binary and *qmldir* file to the folder:
+
+.. code-block:: sh
+
+    cp pyotherside/src/libpyothersideplugin.so /opt/Qt5.3/5.3/android_armv7/qml/io/thp/pyotherside/
+    cp pyotherside/src/qmldir /opt/Qt5.3/5.3/android_armv7/qml/io/thp/pyotherside/
+
+Next open the gPodder project in QtCreator (gpodder-android/gpodder-android.pro) and again make sure the Android kit is selected, that the API level 14 is used and that *shadow build* is disabled. Then just press the *Run* button and the SDK should build an Android APK that includes the libpyotherside binary (it fetched automatically from the plugins directory because is referenced in the gPodder QML source code) and deploy it to the device where gPodder should be started.
+
+.. _gPodder: http://gpodder.org/
+
 Building for Windows
 --------------------
 
@@ -896,6 +1099,17 @@ Known Problems:
 
 ChangeLog
 =========
+
+Version 1.4.0 (2015-02-19)
+--------------------------
+
+* Support for passing Python objects to QML and keeping references there
+* Add :func:`getattr` to get an attribute from a Python object
+* :func:`call` and :func:`call_sync` now also accept a Python callable as
+  first argument
+* Support for `Accessing QObjects from Python`_ (properties and slots)
+* Print error messages to the console if :func:`error` doesn't have any
+  handlers connected
 
 Version 1.3.0 (2014-07-24)
 --------------------------

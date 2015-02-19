@@ -22,9 +22,12 @@
 #include "qpython_priv.h"
 #include "qpython_worker.h"
 
+#include "ensure_gil_state.h"
+
 #include <QDebug>
 
 #include <QJSEngine>
+#include <QMetaMethod>
 
 
 #define SINCE_API_VERSION(smaj, smin) \
@@ -41,6 +44,7 @@ QPython::QPython(QObject *parent, int api_version_major, int api_version_minor)
     , handlers()
     , api_version_major(api_version_major)
     , api_version_minor(api_version_minor)
+    , error_connections(0)
 {
     if (priv == NULL) {
         priv = new QPythonPriv;
@@ -51,8 +55,8 @@ QPython::QPython(QObject *parent, int api_version_major, int api_version_minor)
     QObject::connect(priv, SIGNAL(receive(QVariant)),
                      this, SLOT(receive(QVariant)));
 
-    QObject::connect(this, SIGNAL(process(QString,QVariant,QJSValue *)),
-                     worker, SLOT(process(QString,QVariant,QJSValue *)));
+    QObject::connect(this, SIGNAL(process(QVariant,QVariant,QJSValue *)),
+                     worker, SLOT(process(QVariant,QVariant,QJSValue *)));
     QObject::connect(worker, SIGNAL(finished(QVariant,QJSValue *)),
                      this, SLOT(finished(QVariant,QJSValue *)));
 
@@ -74,9 +78,25 @@ QPython::~QPython()
 }
 
 void
+QPython::connectNotify(const QMetaMethod &signal)
+{
+    if (signal == QMetaMethod::fromSignal(&QPython::error)) {
+        error_connections++;
+    }
+}
+
+void
+QPython::disconnectNotify(const QMetaMethod &signal)
+{
+    if (signal == QMetaMethod::fromSignal(&QPython::error)) {
+        error_connections--;
+    }
+}
+
+void
 QPython::addImportPath(QString path)
 {
-    priv->enter();
+    ENSURE_GIL_STATE;
 
     // Strip leading "file://" (for use with Qt.resolvedUrl())
     if (path.startsWith("file://")) {
@@ -94,7 +114,7 @@ QPython::addImportPath(QString path)
         QString filename = "/io/thp/pyotherside/qrc_importer.py";
         QString errorMessage = priv->importFromQRC(module, filename);
         if (!errorMessage.isNull()) {
-            emit error(errorMessage);
+            emitError(errorMessage);
         }
     }
 
@@ -102,10 +122,8 @@ QPython::addImportPath(QString path)
 
     PyObject *sys_path = PySys_GetObject((char*)"path");
 
-    PyObject *cwd = PyUnicode_FromString(utf8bytes.constData());
-    PyList_Insert(sys_path, 0, cwd);
-    Py_DECREF(cwd);
-    priv->leave();
+    PyObjectRef cwd(PyUnicode_FromString(utf8bytes.constData()), true);
+    PyList_Insert(sys_path, 0, cwd.borrow());
 }
 
 void
@@ -128,25 +146,24 @@ QPython::importModule_sync(QString name)
     QByteArray utf8bytes = name.toUtf8();
     const char *moduleName = utf8bytes.constData();
 
-    priv->enter();
+    ENSURE_GIL_STATE;
 
     bool use_api_10 = (api_version_major == 1 && api_version_minor == 0);
 
-    PyObject *module = NULL;
+    PyObjectRef module;
 
     if (use_api_10) {
         // PyOtherSide API 1.0 behavior (star import)
-        module = PyImport_ImportModule(moduleName);
+        module = PyObjectRef(PyImport_ImportModule(moduleName), true);
     } else {
         // PyOtherSide API 1.2 behavior: "import x.y.z"
-        PyObject *fromList = PyList_New(0);
-        module = PyImport_ImportModuleEx(const_cast<char *>(moduleName), NULL, NULL, fromList);
-        Py_XDECREF(fromList);
+        PyObjectRef fromList(PyList_New(0), true);
+        module = PyObjectRef(PyImport_ImportModuleEx(const_cast<char *>(moduleName),
+                    NULL, NULL, fromList.borrow()), true);
     }
 
-    if (module == NULL) {
-        emit error(QString("Cannot import module: %1 (%2)").arg(name).arg(priv->formatExc()));
-        priv->leave();
+    if (!module) {
+        emitError(QString("Cannot import module: %1 (%2)").arg(name).arg(priv->formatExc()));
         return false;
     }
 
@@ -160,8 +177,7 @@ QPython::importModule_sync(QString name)
         }
     }
 
-    PyDict_SetItemString(priv->globals, moduleName, module);
-    priv->leave();
+    PyDict_SetItemString(priv->globals.borrow(), moduleName, module.borrow());
     return true;
 }
 
@@ -184,7 +200,7 @@ QPython::receive(QVariant variant)
             // call is asynchronous (it returns before we call into JS), so do
             // the next best thing and report the error to our error handler in
             // QML instead.
-            emit error("pyotherside.send() failed handler: " +
+            emitError("pyotherside.send() failed handler: " +
                     result.property("fileName").toString() + ":" +
                     result.property("lineNumber").toString() + ": " +
                     result.toString());
@@ -208,76 +224,102 @@ QPython::setHandler(QString event, QJSValue callback)
 QVariant
 QPython::evaluate(QString expr)
 {
-    priv->enter();
-    PyObject *o = priv->eval(expr);
-    if (o == NULL) {
-        emit error(QString("Cannot evaluate '%1' (%2)").arg(expr).arg(priv->formatExc()));
-        priv->leave();
+    ENSURE_GIL_STATE;
+
+    PyObjectRef o(priv->eval(expr), true);
+    if (!o) {
+        emitError(QString("Cannot evaluate '%1' (%2)").arg(expr).arg(priv->formatExc()));
         return QVariant();
     }
 
-    QVariant v = convertPyObjectToQVariant(o);
-    Py_DECREF(o);
-    priv->leave();
-    return v;
+    return convertPyObjectToQVariant(o.borrow());
 }
 
 void
-QPython::call(QString func, QVariant args, QJSValue callback)
+QPython::call(QVariant func, QVariant args, QJSValue callback)
 {
     QJSValue *cb = 0;
     if (!callback.isNull() && !callback.isUndefined() && callback.isCallable()) {
         cb = new QJSValue(callback);
     }
-    emit process(func, args, cb);
+    // Unbox QJSValue from QVariant, since QJSValue::toVariant() can cause calls into
+    // QML engine and we don't want that to happen from non-GUI thread
+    QVariantList vl = args.toList();
+    for (int i = 0, c = vl.count(); i < c; ++i) {
+        QVariant &v = vl[i];
+        if (v.userType() == qMetaTypeId<QJSValue>()) {
+            // TODO: Support boxing a QJSValue as reference in Python
+            v = v.value<QJSValue>().toVariant();
+        }
+    }
+    emit process(func, vl, cb);
 }
 
 QVariant
-QPython::call_sync(QString func, QVariant args)
+QPython::call_sync(QVariant func, QVariant args)
 {
-    priv->enter();
-    PyObject *callable = priv->eval(func);
+    ENSURE_GIL_STATE;
 
-    if (callable == NULL) {
-        emit error(QString("Function not found: '%1' (%2)").arg(func).arg(priv->formatExc()));
-        priv->leave();
+    PyObjectRef callable;
+    QString name;
+
+    if (SINCE_API_VERSION(1, 4)) {
+        if (static_cast<QMetaType::Type>(func.type()) == QMetaType::QString) {
+            // Using version >= 1.4, but func is a string
+            callable = PyObjectRef(priv->eval(func.toString()), true);
+            name = func.toString();
+        } else {
+            // Try to interpret "func" as a Python object
+            callable = PyObjectRef(convertQVariantToPyObject(func), true);
+            PyObjectRef repr = PyObjectRef(PyObject_Repr(callable.borrow()), true);
+            name = convertPyObjectToQVariant(repr.borrow()).toString();
+        }
+    } else {
+        // Versions before 1.4 only support func as a string
+        callable = PyObjectRef(priv->eval(func.toString()), true);
+        name = func.toString();
+    }
+
+    if (!callable) {
+        emitError(QString("Function not found: '%1' (%2)").arg(name).arg(priv->formatExc()));
         return QVariant();
     }
 
-    if (PyCallable_Check(callable)) {
-        QVariant v;
+    QVariant v;
+    QString errorMessage = priv->call(callable.borrow(), name, args, &v);
+    if (!errorMessage.isNull()) {
+        emitError(errorMessage);
+    }
+    return v;
+}
 
-        PyObject *argl = convertQVariantToPyObject(args);
-        if (!PyList_Check(argl)) {
-            Py_DECREF(callable);
-            Py_XDECREF(argl);
-            emit error(QString("Not a parameter list in call to %1: %2")
-                    .arg(func).arg(args.toString()));
-            priv->leave();
-            return QVariant();
-        }
-
-        PyObject *argt = PyList_AsTuple(argl);
-        Py_DECREF(argl);
-        PyObject *o = PyObject_Call(callable, argt, NULL);
-        Py_DECREF(argt);
-
-        if (o == NULL) {
-            emit error(QString("Return value of PyObject call is NULL: %1").arg(priv->formatExc()));
-        } else {
-            v = convertPyObjectToQVariant(o);
-            Py_DECREF(o);
-        }
-
-        Py_DECREF(callable);
-        priv->leave();
-        return v;
+QVariant
+QPython::getattr(QVariant obj, QString attr) {
+    if (!SINCE_API_VERSION(1, 4)) {
+        emitError(QString("Import PyOtherSide 1.4 or newer to use getattr()"));
+        return QVariant();
     }
 
-    emit error(QString("Not a callable: %1").arg(func));
-    Py_DECREF(callable);
-    priv->leave();
-    return QVariant();
+    ENSURE_GIL_STATE;
+
+    PyObjectRef pyobj(convertQVariantToPyObject(obj), true);
+
+    if (!pyobj) {
+        emitError(QString("Failed to convert %1 to python object: '%1' (%2)").arg(obj.toString()).arg(priv->formatExc()));
+        return QVariant();
+    }
+
+    QByteArray byteArray = attr.toUtf8();
+    const char *attrStr = byteArray.data();
+
+    PyObjectRef o(PyObject_GetAttrString(pyobj.borrow(), attrStr), true);
+
+    if (!o) {
+        emitError(QString("Attribute not found: '%1' (%2)").arg(attr).arg(priv->formatExc()));
+        return QVariant();
+    }
+
+    return convertPyObjectToQVariant(o.borrow());
 }
 
 void
@@ -289,7 +331,7 @@ QPython::finished(QVariant result, QJSValue *callback)
     QJSValue callbackResult = callback->call(args);
     if (SINCE_API_VERSION(1, 2)) {
         if (callbackResult.isError()) {
-            emit error(callbackResult.property("fileName").toString() + ":" +
+            emitError(callbackResult.property("fileName").toString() + ":" +
                     callbackResult.property("lineNumber").toString() + ": " +
                     callbackResult.toString());
         }
@@ -306,7 +348,7 @@ QPython::imported(bool result, QJSValue *callback)
     QJSValue callbackResult = callback->call(args);
     if (SINCE_API_VERSION(1, 2)) {
         if (callbackResult.isError()) {
-            emit error(callbackResult.property("fileName").toString() + ":" +
+            emitError(callbackResult.property("fileName").toString() + ":" +
                     callbackResult.property("lineNumber").toString() + ": " +
                     callbackResult.toString());
         }
@@ -324,4 +366,17 @@ QString
 QPython::pythonVersion()
 {
     return QString(PY_VERSION);
+}
+
+void
+QPython::emitError(const QString &message)
+{
+    if (error_connections) {
+        emit error(message);
+    } else {
+        // We should only print the error if SINCE_API_VERSION(1, 4), but as
+        // the error messages are useful for debugging (especially if users
+        // don't import the latest API version), we do it unconditionally
+        qWarning("Unhandled PyOtherSide error: %s", message.toUtf8().constData());
+    }
 }

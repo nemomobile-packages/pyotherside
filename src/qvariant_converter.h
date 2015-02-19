@@ -22,10 +22,15 @@
 #include "converter.h"
 
 #include <QVariant>
+#include <QCoreApplication>
+
 #include <QTime>
 #include <QDate>
 #include <QDateTime>
+#include <QJSValue>
+
 #include <QDebug>
+#include <QThread>
 
 class QVariantListBuilder : public ListBuilder<QVariant> {
     public:
@@ -63,7 +68,7 @@ class QVariantDictBuilder : public DictBuilder<QVariant> {
 
 class QVariantListIterator : public ListIterator<QVariant> {
     public:
-        QVariantListIterator(QVariant &v) : list(v.toList()), pos(0) {}
+        QVariantListIterator(const QVariant &v) : list(v.toList()), pos(0) {}
         virtual ~QVariantListIterator() {}
 
         virtual bool next(QVariant *v) {
@@ -84,7 +89,7 @@ class QVariantListIterator : public ListIterator<QVariant> {
 
 class QVariantDictIterator : public DictIterator<QVariant> {
     public:
-        QVariantDictIterator(QVariant &v) : dict(v.toMap()), keys(dict.keys()), pos(0) {}
+        QVariantDictIterator(const QVariant &v) : dict(v.toMap()), keys(dict.keys()), pos(0) {}
         virtual ~QVariantDictIterator() {}
 
         virtual bool next(QVariant *key, QVariant *value) {
@@ -111,44 +116,64 @@ class QVariantConverter : public Converter<QVariant> {
         QVariantConverter() : stringstorage() {}
         virtual ~QVariantConverter() {}
 
-        virtual enum Type type(QVariant &v) {
-            QVariant::Type t = v.type();
+        virtual enum Type type(const QVariant &v) {
+            if (v.canConvert<QObject *>()) {
+                return QOBJECT;
+            }
+
+            QMetaType::Type t = (QMetaType::Type)v.type();
             switch (t) {
-                case QVariant::Bool:
+                case QMetaType::Bool:
                     return BOOLEAN;
-                case QVariant::Int:
-                case QVariant::LongLong:
-                case QVariant::UInt:
-                case QVariant::ULongLong:
+                case QMetaType::Int:
+                case QMetaType::LongLong:
+                case QMetaType::UInt:
+                case QMetaType::ULongLong:
                     return INTEGER;
-                case QVariant::Double:
+                case QMetaType::Double:
                     return FLOATING;
-                case QVariant::String:
+                case QMetaType::QString:
                     return STRING;
-                case QVariant::Date:
+                case QMetaType::QDate:
                     return DATE;
-                case QVariant::Time:
+                case QMetaType::QTime:
                     return TIME;
-                case QVariant::DateTime:
+                case QMetaType::QDateTime:
                     return DATETIME;
-                case QVariant::List:
-                case QVariant::StringList:
+                case QMetaType::QVariantList:
+                case QMetaType::QStringList:
                     return LIST;
-                case QVariant::Map:
+                case QMetaType::QVariantMap:
                     return DICT;
-                case QVariant::Invalid:
+                case QMetaType::UnknownType:
                     return NONE;
                 default:
-                    qDebug() << "Cannot convert:" << v;
-                    return NONE;
+                    int userType = v.userType();
+                    if (userType == qMetaTypeId<PyObjectRef>()) {
+                        return PYOBJECT;
+                    } else if (userType == qMetaTypeId<QJSValue>()) {
+                        Q_ASSERT(QThread::currentThread() == qApp->thread());
+                        return type(QVariant());
+                    } else {
+                        qDebug() << "Cannot convert:" << v;
+                        return NONE;
+                    }
             }
         }
 
         virtual ListIterator<QVariant> *list(QVariant &v) {
+            // XXX: Until we support boxing QJSValue objects directly in Python
+            if (v.userType() == qMetaTypeId<QJSValue>()) {
+                return new QVariantListIterator(v.value<QJSValue>().toVariant());
+            }
             return new QVariantListIterator(v);
         }
 
         virtual DictIterator<QVariant> *dict(QVariant &v) {
+            // XXX: Until we support boxing QJSValue objects directly in Python
+            if (v.userType() == qMetaTypeId<QJSValue>()) {
+                return new QVariantDictIterator(v.value<QJSValue>().toVariant());
+            }
             return new QVariantDictIterator(v);
         }
 
@@ -187,6 +212,14 @@ class QVariantConverter : public Converter<QVariant> {
             return stringstorage.constData();
         }
 
+        virtual PyObjectRef pyObject(QVariant &v) {
+            return v.value<PyObjectRef>();
+        }
+
+        virtual QObjectRef qObject(QVariant &v) {
+            return QObjectRef(v.value<QObject *>());
+        }
+
         virtual ListBuilder<QVariant> *newList() {
             return new QVariantListBuilder;
         }
@@ -205,6 +238,12 @@ class QVariantConverter : public Converter<QVariant> {
             QDate d(v.y, v.m, v.d);
             QTime t(v.time.h, v.time.m, v.time.s, v.time.ms);
             return QVariant(QDateTime(d, t));
+        }
+        virtual QVariant fromPyObject(const PyObjectRef &pyobj) {
+            return QVariant::fromValue(pyobj);
+        }
+        virtual QVariant fromQObject(const QObjectRef &qobj) {
+            return QVariant::fromValue(qobj.value());
         }
         virtual QVariant none() { return QVariant(); };
 
